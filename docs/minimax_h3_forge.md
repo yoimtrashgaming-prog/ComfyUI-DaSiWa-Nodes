@@ -11,8 +11,9 @@ The **Forge** button is on the MiniMax H3 Director node, next to its other butto
 1. Install **[Ollama](https://ollama.com/download)** and start it.
 2. Download a model that can see pictures. In a terminal:
    ```
-   ollama pull qwen3-vl:8b
+   ollama pull qwen3-vl:8b-instruct
    ```
+   Use the **`-instruct`** version. The plain `qwen3-vl:8b` is a "thinking" model: it can spend its whole reply reasoning and write no prompt at all.
 3. Open the Director, press **Forge**, and pick the model from the **Model** list. The list is re-read every time Forge opens, so there is no need to restart ComfyUI.
 
 That's it. There's nothing to set in ComfyUI's Settings for this, because Forge finds Ollama on your own computer automatically.
@@ -65,7 +66,8 @@ If the server is on **another computer**, the model uses that computer's graphic
 | Your server's models don't appear | The address is in the wrong box, or the server isn't running | Use **OpenAI-compatible server address**, not **Ollama address** |
 | **"WARNING: model still loaded"** after Generate | Your server can't unload the model | Close the server or unload the model yourself before Run (see above) |
 | A model is greyed out: "needs llama-cpp-python installed" | A `.gguf` in `models/llm` without llama.cpp support | Install `llama-cpp-python` in ComfyUI's Python, or use Ollama |
-| The prompt ignores your pictures | The model can't see images (or it's a `.gguf` inside ComfyUI) | Pick a vision model, e.g. `qwen3-vl:8b` in Ollama |
+| **"…spent its whole reply thinking and wrote no prompt"** | The model is a thinking model and never got to the answer | Pick a non-thinking (instruct) model, e.g. `qwen3-vl:8b-instruct` |
+| The prompt ignores your pictures | The model can't see images (or it's a `.gguf` inside ComfyUI) | Pick a vision model, e.g. `qwen3-vl:8b-instruct` in Ollama |
 
 ---
 
