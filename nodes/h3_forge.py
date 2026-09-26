@@ -436,7 +436,7 @@ class Ollama:
         message = {"role": "user", "content": user}
         if images_b64:
             message["images"] = images_b64
-        parts, stats = [], {}
+        parts, thought, stats = [], 0, {}
         for line in _stream_lines(self.base + "/api/chat", {
             "model": name, "stream": True, "think": False, "keep_alive": 0,
             "messages": [{"role": "system", "content": system}, message],
@@ -447,9 +447,16 @@ class Ollama:
             if chunk.get("error"):
                 raise ForgeError("backend", f"Ollama: {chunk['error']}")
             parts.append((chunk.get("message") or {}).get("content") or "")
+            thought += len((chunk.get("message") or {}).get("thinking") or "")
             if chunk.get("done"):
                 stats = {"prompt_tokens": chunk.get("prompt_eval_count"), "output_tokens": chunk.get("eval_count")}
-        return "".join(parts), stats
+        text = "".join(parts)
+        # Thinking models (e.g. Ollama's plain "qwen3-vl:8b" tag) ignore
+        # think=false and can spend the whole budget reasoning, answering nothing.
+        if not text.strip() and thought:
+            raise ForgeError("thinking_only", f"{name} spent its whole reply thinking and wrote no prompt. "
+                             "Use a non-thinking (instruct) model instead, e.g. qwen3-vl:8b-instruct.")
+        return text, stats
 
 
 class OpenAICompatible:
@@ -484,7 +491,7 @@ class OpenAICompatible:
         if images_b64:
             content = [{"type": "text", "text": user}] + [
                 {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b}"}} for b in images_b64]
-        parts, usage = [], {}
+        parts, thought, usage = [], 0, {}
         for line in _stream_lines(self.api + "/chat/completions", {
             "model": name, "stream": True, "stream_options": {"include_usage": True}, "max_tokens": NUM_PREDICT,
             "temperature": sampling.get("temperature", 0.7), "top_p": sampling.get("top_p", 0.8),
@@ -500,8 +507,14 @@ class OpenAICompatible:
             chunk = json.loads(data)
             usage = chunk.get("usage") or usage
             for choice in chunk.get("choices") or []:
-                parts.append((choice.get("delta") or {}).get("content") or "")
-        return "".join(parts), {"prompt_tokens": usage.get("prompt_tokens"), "output_tokens": usage.get("completion_tokens")}
+                delta = choice.get("delta") or {}
+                parts.append(delta.get("content") or "")
+                thought += len(delta.get("reasoning_content") or "")
+        text = "".join(parts)
+        if not text.strip() and thought:
+            raise ForgeError("thinking_only", f"{name} spent its whole reply thinking and wrote no prompt. "
+                             "Use a non-thinking (instruct) model instead, or turn thinking off in your server.")
+        return text, {"prompt_tokens": usage.get("prompt_tokens"), "output_tokens": usage.get("completion_tokens")}
 
 
 class _NoGqaWithoutFlash:
@@ -601,7 +614,20 @@ class Local:
         return quant.get("quant_method") == "compressed-tensors"
 
     def can_see(self, name):
-        return not name.lower().endswith(".gguf")  # nodes_llm's llama.cpp path is text-only
+        """Vision models carry a vision_config; nodes_llm's llama.cpp path is text-only.
+
+        Asked rather than assumed: a text-only folder handed a picture fails in
+        the processor with a technical error, instead of writing from the idea.
+        """
+        if name.lower().endswith(".gguf"):
+            return False
+        try:
+            path = self._llm()._resolve_model_path(name, "")
+            with open(os.path.join(path, "config.json"), "r", encoding="utf-8") as fh:
+                cfg = json.load(fh)
+        except Exception:
+            return False
+        return bool(cfg.get("vision_config"))
 
     def loaded(self):
         return set()
