@@ -1,6 +1,6 @@
 # MiniMax H3 Forge
 
-**Forge** writes your H3 prompt for you with a local AI model (an LLM). Type a short idea, pick a model, press **Generate**. Forge fills the Director's prompt fields, **unloads the model to free your graphics card**, and then you press Run as usual.
+**Forge** writes your H3 prompt for you with a local AI model (an LLM). Type a short idea, pick a model, press **Generate**. Forge shows you the prompt and **unloads the model to free your graphics card**; **Apply to node** puts it in the Director's prompt editor, and then you press Run as usual. The last three prompts are kept on the node, so you can go back to one.
 
 The **Forge** button is on the MiniMax H3 Director node, next to its other buttons. It is not available in Image Inpaint mode.
 
@@ -68,6 +68,7 @@ If the server is on **another computer**, the model uses that computer's graphic
 | A model is greyed out: "needs llama-cpp-python installed" | A `.gguf` in `models/llm` without llama.cpp support | Install `llama-cpp-python` in ComfyUI's Python, or use Ollama |
 | **"…spent its whole reply thinking and wrote no prompt"** | The model is a thinking model and never got to the answer | Pick a non-thinking (instruct) model, e.g. `qwen3-vl:8b-instruct` |
 | The prompt ignores your pictures | The model can't see images (or it's a `.gguf` inside ComfyUI) | Pick a vision model, e.g. `qwen3-vl:8b-instruct` in Ollama |
+| Your `.gguf` model is a vision model but still ignores pictures | A `.gguf` has no eyes on its own: vision lives in a second file, the **mmproj** (e.g. `mmproj-…-F16.gguf`), and Forge's `models/llm` reads `.gguf` as text only | Get the mmproj from the same download page and run both through Ollama (a `Modelfile` with one `FROM` line for each file, then `ollama create`), or through `llama-server --mmproj`. Or use `qwen3-vl:8b-instruct` |
 
 ---
 

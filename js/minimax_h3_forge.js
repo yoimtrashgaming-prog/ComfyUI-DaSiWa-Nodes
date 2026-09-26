@@ -36,7 +36,7 @@ function forgeHistory(node) {
 function saveForgeResult(node, result, brief) {
   const entry = {
     mode: result.mode, model: result.model, simple_prompt: result.simple_prompt,
-    fields: result.fields, brief, createdAt: Date.now(),
+    fields: result.fields, brief, createdAt: Date.now(), duration: Number(result.duration) || null,
   };
   node.properties ||= {};
   node.properties[HISTORY_KEY] = [entry, ...forgeHistory(node)].slice(0, 3);
@@ -184,6 +184,9 @@ async function open(node) {
     output.textContent = entry.simple_prompt;
     applyBtn.disabled = !!running || entry.mode !== hook.mode();
     if (entry.mode !== hook.mode()) setStatus(`This draft is for ${entry.mode}; switch the Director to that mode before applying.`, true);
+    // Timestamps, and FL2VA/L2VA's end-frame line, are written for the length the
+    // draft was made at. Still appliable; the person may be about to change it back.
+    else if (entry.duration && hook.duration() && entry.duration !== hook.duration()) setStatus(`This draft was written for a ${entry.duration} s clip and the Director is set to ${hook.duration()} s, so its timing won't fit. Set the duration back or regenerate.`, true);
     renderHistory();
   };
   const renderHistory = () => {
@@ -267,7 +270,12 @@ async function open(node) {
       if (!res.ok) { output.hidden = !data.raw; output.textContent = data.raw || ""; throw new Error(data.message || res.statusText); }
       const saved = saveForgeResult(node, data, text);
       showResult(saved);
-      const seen = data.saw_images ? ` · looked at ${data.saw_images} picture${data.saw_images === 1 ? "" : "s"}` : refs.some(r => r.kind === "image") && data.vision === false ? " · this model cannot see images, so it wrote from your idea only" : "";
+      // A .gguf in models/llm is text-only here even when the model itself can see,
+      // because its vision lives in a separate mmproj file. Say so, not just "cannot see".
+      const blind = /^local:.*\.gguf$/i.test(data.model || "")
+        ? " · .gguf models in ComfyUI/models/llm can't see pictures (vision needs the model's mmproj file, run through Ollama); it wrote from your idea only"
+        : " · this model cannot see images, so it wrote from your idea only";
+      const seen = data.saw_images ? ` · looked at ${data.saw_images} picture${data.saw_images === 1 ? "" : "s"}` : refs.some(r => r.kind === "image") && data.vision === false ? blind : "";
       const warned = [...(data.warnings || []), ...(data.unloaded ? [] : ["WARNING: model still loaded"])];
       setStatus(`Done in ${data.stats.seconds}s${data.stats.output_tokens ? ` · ${data.stats.output_tokens} tokens` : ""}${seen}${warned.length ? " · " + warned.join(" · ") : " · model unloaded"}`, warned.length > 0);
     } catch (err) {

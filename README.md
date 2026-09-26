@@ -21,7 +21,7 @@ Timeline-based authoring for MiniMax H3 generation workflows. Separate Image/Vid
 - 🔀 **Reference handling:** drag-reorder between slots, external soundtracks per video, visual crop via draggable markers, incompatible media preserved on mode toggle
 - 📋 **Paste & upload:** lane selection + Ctrl+V paste into chosen lane, drag-and-drop from file manager, paste-replace onto selected tile
 - ✍️ **Prompt editor:** one free-text field per mode, with optional structure, shot/RefMod insertion, and reference-label prefill; legacy prompts migrate into the same field.
-- ✨ **Prompt Forge:** write H3 prompts from an idea and timeline references with a local ComfyUI LLM, Ollama, or a configured OpenAI-compatible server; review before applying and keep three drafts per Director node.
+- ✨ **Prompt Forge:** write H3 prompts from an idea and timeline references with a local ComfyUI LLM, Ollama, or a configured OpenAI-compatible server; review before applying and keep three drafts per Director node. [Forge setup guide →](docs/minimax_h3_forge.md)
 - 📐 **Resolution panel:** Aspect/Resolution/Input Scaling selectors (all default Auto) on 32px grid; grouped dropdowns; CUSTOM values; Torch Resize preprocessing (Off/Auto/Target/Fit/Fill/Fit+pad/Divisible crop)
 - 💾 **Save/Load packs:** reference files + prompt + RefMod selections persisted independently; append or overwrite with limit validation and missing-file checks
 - 🎬 **Video thumbnails:** first-frame preview behind each video clip tile
@@ -30,7 +30,6 @@ Timeline-based authoring for MiniMax H3 generation workflows. Separate Image/Vid
 - 🧩 **Native routing & lazy loading:** hands validated data to built-in MiniMaxH3 nodes; only selected model requested; REF2VA binds native inputs by name for Core-order compatibility
 - ⚙️ **External overwrite inputs:** `external_prompt_overwrite` (STRING), `external_width_overwrite` + `external_height_overwrite` (INT) bypass Director canvas sizing
 - 🎞️ **Frame rate:** FLOAT input (0.1–240, default 24) with matching output for downstream nodes
-- 🔨 **Forge:** writes the prompt with a local LLM (Ollama, a model in `models/llm`, or llama.cpp / any OpenAI-compatible server), fills the builder fields, then unloads the model so H3 gets the whole GPU. Easiest setup: install Ollama and `ollama pull qwen3-vl:8b-instruct`. [Forge guide →](docs/minimax_h3_forge.md)
 
 [Full documentation, UI guide, and prompting reference →](docs/minimax_h3_director.md)
 

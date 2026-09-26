@@ -539,8 +539,9 @@ class _NoGqaWithoutFlash:
             from transformers.integrations import sdpa_attention
             if torch.cuda.is_available() and not torch.backends.cuda.is_flash_attention_available():
                 self._saved = sdpa_attention.use_gqa_in_sdpa
-                # transformers added `value` as a third argument in newer releases.
-                sdpa_attention.use_gqa_in_sdpa = lambda attention_mask, key, value=None: False
+                # Any signature: transformers added `value` in newer releases
+                # (0440994), and the answer here never depends on the arguments.
+                sdpa_attention.use_gqa_in_sdpa = lambda *args, **kwargs: False
         except Exception:
             self._saved = None
         return self
@@ -847,6 +848,9 @@ def _generate(body, input_directory, release_memory, stop):
                         "which Forge can unload. See docs/minimax_h3_forge.md.")
     return {
         "mode": mode,
+        # The draft's timestamps (and FL2VA/L2VA's end-frame line) are written
+        # for this length; the pop-out warns if the node's duration has changed.
+        "duration": duration,
         "fields": fields,
         "simple_prompt": simple,
         "warnings": warnings,
