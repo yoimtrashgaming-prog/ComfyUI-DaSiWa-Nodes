@@ -33,9 +33,13 @@ except ImportError:  # pragma: no cover - direct test import
 BUNDLE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "h3_forge.json")
 BASE_MODES = ("T2VA", "I2VA", "FL2VA", "L2VA")
 IMAGE_MAX_EDGE = 1024
-# Seven thousand characters is the H3 prompt ceiling; ~2.2 chars/token for
-# this kind of prose with headroom for the segment markers.
-NUM_PREDICT = 3500
+# Seven thousand characters is the H3 prompt ceiling. English prose runs
+# 3.5-4 characters a token, so that is about 2,000 tokens with the segment
+# markers; a complete REF2VA prompt measured 897 (27B) and 1,386 (9B) on
+# 30 Sep 2026. 3,500 allowed twice H3's limit, and a model that had lost the
+# thread used all of it. This is a ceiling, not a target: it cuts a runaway
+# off sooner, and the reply is rejected either way.
+NUM_PREDICT = 2500
 
 
 _bundle_cache = {"mtime": None, "data": None}
