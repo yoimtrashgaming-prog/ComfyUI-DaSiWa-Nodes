@@ -84,11 +84,54 @@ def _format_duration(seconds):
     return f"{mins}m {round(s - mins * 60)}s"
 
 
+def picture_groups(references):
+    """Pictures the person marked as one subject: [[1, 3, 5], ...] by picture number.
+
+    Explicit subject identity from the Group picker, never a guess from the
+    idea. Only subject pictures group, and a group needs two members.
+    """
+    by_id, number = {}, 0
+    for ref in references:
+        if ref.get("kind") != "image":
+            continue
+        number += 1
+        group = ref.get("subject_group")
+        if (ref.get("role") or "subject") != "subject" or not isinstance(group, str) or not group:
+            continue
+        by_id.setdefault(group, []).append(number)
+    return [pictures for pictures in by_id.values() if len(pictures) >= 2]
+
+
+_COUNT_WORD = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine"]
+
+
+def _group_line(pictures, references):
+    """The one reference line a subject group gets."""
+    tags = [f"<Picture {n}>" for n in pictures]
+    count = _COUNT_WORD[len(tags)] if len(tags) < len(_COUNT_WORD) else str(len(tags))
+    every = "both" if len(tags) == 2 else f"all {count}"
+    bits = [", ".join(tags),
+            f"subject — ONE subject shown in {count} pictures: define a single <Subject N> citing {every}; no standalone picture lines"]
+    images = [r for r in references if r.get("kind") == "image"]
+    for n in pictures:
+        ref = images[n - 1]
+        if ref.get("keep"):
+            bits.append(f"keep (<Picture {n}>): {ref['keep']}")
+        if ref.get("drop"):
+            bits.append(f"drop (<Picture {n}>): {ref['drop']}")
+    return "- " + " · ".join(bits)
+
+
 def format_references(references, mode):
     """Director label lines for each reference, and the labels of the pictures."""
     counters = {"Picture": 0, "Video": 0, "Audio": 0}
     lines, pictures = [], []
     base_mode = mode in BASE_MODES
+    grouped = {}
+    if mode == "REF2VA":
+        for group in picture_groups(references):
+            for n in group:
+                grouped[n] = group
     for ref in references:
         kind = ref.get("kind")
         labels = _STREAM_EMITS.get(ref.get("stream"), ["Video"]) if kind == "video" else [_KIND_LABEL.get(kind, "Picture")]
@@ -99,6 +142,12 @@ def format_references(references, mode):
             first = n == 0
             if first and kind == "image":
                 pictures.append((ref, tag))
+                group = grouped.get(counters["Picture"])
+                if group:
+                    # One line for the whole group, where its first picture sits.
+                    if counters["Picture"] == group[0]:
+                        lines.append(_group_line(group, references))
+                    continue
             bits = [tag]
             if label == "Audio" and kind == "video" and video_index:
                 bits.append(f"synchronized audio track of <Video {video_index}>")
@@ -119,6 +168,122 @@ def format_references(references, mode):
                 bits.append(f"drop: {ref['drop']}")
             lines.append("- " + " · ".join(bits))
     return lines, pictures
+
+
+# ── Picture descriptions: a port of PromptForge's server/picture-readings.mjs ──
+#
+# REF2VA with two or more pictures: the model looks at each picture on its own
+# (a subject group together) and writes a short description, and the prompt is
+# written from those plus the labelled pictures. With several pictures in one
+# call, models lost track of which picture was which (PromptForge, 29 Sep 2026:
+# an 8B described the background picture as a second copy of the character).
+# The instructions come from the bundle (picture_reader), so both apps scan
+# with the same words.
+
+_ROLE_HINT = {
+    "subject": "It shows a subject for the video: a person, creature, object or place that should appear in it.",
+    "style": "It is a style reference: only how it is rendered matters, not what it shows.",
+    "keyframe": "It is a keyframe: an exact frame the video will show at some point.",
+}
+READING_MAX = 2000
+SCAN_TOKENS = 320
+
+# Room for the write. The bundle's context is sized for a text-only prompt;
+# REF2VA's instructions with five pictures measured 14,561 prompt tokens
+# (30 Sep 2026, qwen3.5:9b), which left 1,800 of a 16,384 window for an answer
+# that needs up to NUM_PREDICT - the model ran out and wrote word salad. A
+# 1024 px picture costs roughly a thousand tokens.
+PICTURE_TOKENS = 1100
+CHARS_PER_TOKEN = 3.5
+CONTEXT_STEP = 8192
+CONTEXT_MAX = 40960
+
+
+def context_for(base, text_chars, pictures):
+    """The context window a write needs: the bundle's, or the next step up that fits."""
+    need = int(text_chars / CHARS_PER_TOKEN) + pictures * PICTURE_TOKENS + NUM_PREDICT + 512
+    ctx = int(base)
+    while ctx < need and ctx < CONTEXT_MAX:
+        ctx += CONTEXT_STEP
+    return ctx
+
+
+def reading_units(references, mode="REF2VA"):
+    """What to scan, in Director order: each picture on its own, a group together.
+
+    [{"labels": ["<Picture 1>", ...], "pictures": [1, ...], "refs": [ref, ...], "role": str}],
+    only for pictures that have a file.
+    """
+    _lines, pictures = format_references(references, mode)
+    numbered = [(i + 1, ref, tag) for i, (ref, tag) in enumerate(pictures)]
+    group_of = {}
+    if mode == "REF2VA":
+        for group in picture_groups(references):
+            for n in group:
+                group_of[n] = group
+    units, done = [], set()
+    for n, ref, _tag in numbered:
+        if n in done or not ref.get("path"):
+            continue
+        members = [m for m in numbered if m[0] in group_of[n] and m[1].get("path")] if n in group_of else [(n, ref, _tag)]
+        done.update(m[0] for m in members)
+        units.append({
+            "labels": [m[2] for m in members],
+            "pictures": [m[0] for m in members],
+            "refs": [m[1] for m in members],
+            "role": members[0][1].get("role") or "subject",
+        })
+    return units
+
+
+def reading_message(unit):
+    """What the scanner is told about a unit. Not the idea: a scanner told the
+    story reports it back as something it saw."""
+    lines = [_ROLE_HINT.get(unit["role"], _ROLE_HINT["subject"])]
+    count = len(unit["refs"])
+    if count > 1:
+        lines.append(f"These {count} pictures show the same subject. Describe it once, as one subject, "
+                     "and say briefly what differs between the pictures (outfit, pose, framing).")
+    keep = [str(r.get("keep") or "").strip() for r in unit["refs"]]
+    drop = [str(r.get("drop") or "").strip() for r in unit["refs"]]
+    keep, drop = list(dict.fromkeys(k for k in keep if k)), list(dict.fromkeys(d for d in drop if d))
+    if keep:
+        lines.append(f"The person wants to keep: {'; '.join(keep)}.")
+    if drop:
+        lines.append(f"The person wants to leave out: {'; '.join(drop)}.")
+    return "\n".join(lines)
+
+
+def given_reading(unit):
+    """The description the overlay already holds for a unit, or None.
+
+    Scanned earlier or written by the person, it stands in for a scan. A group
+    counts only when every picture in it carries the same text.
+    """
+    texts = [str(r.get("reading") or "").strip() for r in unit["refs"]]
+    if not texts or any(not t or t != texts[0] for t in texts):
+        return None
+    return texts[0][:READING_MAX]
+
+
+def usable_reading(text):
+    """A description, or None. UNAVAILABLE is the scanner saying it saw nothing."""
+    t = _THINK.sub("", str(text or "")).strip()
+    if not t or re.fullmatch(r"unavailable\.?", t, re.I):
+        return None
+    return t
+
+
+def reading_lines(units, readings):
+    """The descriptions for the prompt writer, under the Director's labels."""
+    kept = [(u, readings.get(", ".join(u["labels"]))) for u in units]
+    kept = [(u, text) for u, text in kept if text]
+    if not kept:
+        return []
+    lines = ["", "What is in each picture. Each was looked at on its own, so these say which picture shows what. "
+                 "Cite every picture by exactly the label given here. These are notes to you: do not copy their wording."]
+    lines += [f"{', '.join(u['labels'])}: {text}" for u, text in kept]
+    return lines
 
 
 # ── The user message: the h3 path of PromptForge's buildUserMessage ───────
@@ -154,7 +319,8 @@ def scale_detail_rule(rule, duration):
     return out.replace(", the reference guide's own range", f" for this {float(duration):g}-second clip")
 
 
-def build_user_message(bundle, brief, mode, duration, detail, creativity, references, carries_image):
+def build_user_message(bundle, brief, mode, duration, detail, creativity, references, carries_image,
+                       picture_lines=(), labelled=False):
     lines = [f'Brief: "{str(brief).strip()}"']
     settings = [f"Creativity: {title_case(creativity)}", f"Mode: {mode}"]
     if duration:
@@ -179,14 +345,17 @@ def build_user_message(bundle, brief, mode, duration, detail, creativity, refere
 
     if references:
         ref_lines, pictures = format_references(references, mode)
-        lines += ["", "References:", *ref_lines]
+        lines += ["", "References:", *ref_lines, *picture_lines]
         labels = [tag for _ref, tag in pictures]
         if carries_image and labels:
+            # Backends that can put a label beside each picture do (labelled);
+            # the rest rely on the order.
+            how = "each one right after its label" if labelled else "in that order"
             lines.append("")
             lines.append(
                 f"The picture for {labels[0]} is attached to this message. Look at it — the line above says what it is FOR, the picture says what is in it."
                 if len(labels) == 1 else
-                f"The pictures for {', '.join(labels)} are attached to this message, in that order. Look at them — the lines above say what each one is FOR, the pictures say what is in them."
+                f"The pictures for {', '.join(labels)} are attached to this message, {how}. Look at them — the lines above say what each one is FOR, the pictures say what is in them."
             )
     return "\n".join(lines)
 
@@ -432,15 +601,28 @@ class Ollama:
             log_dasiwa("H3 Forge", f"unload of {name} failed: {exc}")
         return name not in self.loaded()
 
-    def chat(self, name, system, user, images_b64, sampling, num_ctx, timeout, cancel=None):
+    labels_pictures = True
+
+    def chat(self, name, system, user, images_b64, sampling, num_ctx, timeout, cancel=None,
+             image_labels=None, keep_loaded=False, max_tokens=None):
         message = {"role": "user", "content": user}
+        messages = [{"role": "system", "content": system}, message]
         if images_b64:
             message["images"] = images_b64
+            if image_labels and len(image_labels) == len(images_b64):
+                # Ollama's chat cannot mix text and pictures inside a message,
+                # so the labels go as lines under the text, in picture order -
+                # the layout PromptForge's Ollama path sends. One message, not
+                # one per picture: split up, qwen3.5:9b rambled to the token
+                # limit and lost the last sections (0 of 10, 30 Sep 2026).
+                message["content"] = user + "\n" + "\n".join(f"{label}:" for label in image_labels)
         parts, thought, stats = [], 0, {}
         for line in _stream_lines(self.base + "/api/chat", {
-            "model": name, "stream": True, "think": False, "keep_alive": 0,
-            "messages": [{"role": "system", "content": system}, message],
-            "options": {"num_ctx": num_ctx, "num_predict": NUM_PREDICT,
+            # A scan is several calls in a row; the model stays in until the
+            # caller unloads it. A single write still unloads itself.
+            "model": name, "stream": True, "think": False, "keep_alive": "10m" if keep_loaded else 0,
+            "messages": messages,
+            "options": {"num_ctx": num_ctx, "num_predict": max_tokens or NUM_PREDICT,
                         "temperature": sampling.get("temperature", 0.7), "top_p": sampling.get("top_p", 0.8)},
         }, timeout, cancel):
             chunk = json.loads(line)
@@ -486,14 +668,21 @@ class OpenAICompatible:
         except Exception:
             return False
 
-    def chat(self, name, system, user, images_b64, sampling, num_ctx, timeout, cancel=None):
+    labels_pictures = True
+
+    def chat(self, name, system, user, images_b64, sampling, num_ctx, timeout, cancel=None,
+             image_labels=None, keep_loaded=False, max_tokens=None):
         content = user
         if images_b64:
-            content = [{"type": "text", "text": user}] + [
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b}"}} for b in images_b64]
+            labelled = image_labels and len(image_labels) == len(images_b64)
+            content = [{"type": "text", "text": user}]
+            for i, b in enumerate(images_b64):
+                if labelled:
+                    content.append({"type": "text", "text": f"{image_labels[i]}:"})
+                content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b}"}})
         parts, thought, usage = [], 0, {}
         for line in _stream_lines(self.api + "/chat/completions", {
-            "model": name, "stream": True, "stream_options": {"include_usage": True}, "max_tokens": NUM_PREDICT,
+            "model": name, "stream": True, "stream_options": {"include_usage": True}, "max_tokens": max_tokens or NUM_PREDICT,
             "temperature": sampling.get("temperature", 0.7), "top_p": sampling.get("top_p", 0.8),
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}],
             # llama.cpp server honours this; others ignore unknown fields.
@@ -638,9 +827,15 @@ class Local:
         self._llm()._release_all_model_memory()
         return True
 
-    def chat(self, name, system, user, images_b64, sampling, num_ctx, timeout, cancel=None):
+    # nodes_llm hands the pictures to the processor as one list, so there is
+    # nowhere to put a label beside each; this path relies on their order.
+    labels_pictures = False
+
+    def chat(self, name, system, user, images_b64, sampling, num_ctx, timeout, cancel=None,
+             image_labels=None, keep_loaded=False, max_tokens=None):
         llm = self._llm()
         gguf = name.lower().endswith(".gguf")
+        budget = max_tokens or NUM_PREDICT
         config = {
             "model_path": llm._resolve_model_path(name, "", allow_gguf=gguf),
             "backend": "llama_cpp" if gguf else "transformers",
@@ -661,7 +856,7 @@ class Local:
                 parts = []
                 for chunk in loaded.model.create_chat_completion(
                         messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
-                        max_tokens=NUM_PREDICT, temperature=temperature, top_p=top_p, stream=True):
+                        max_tokens=budget, temperature=temperature, top_p=top_p, stream=True):
                     if cancel is not None and cancel.is_set():
                         raise ForgeError("cancelled", CANCELLED)
                     parts.append(((chunk.get("choices") or [{}])[0].get("delta") or {}).get("content") or "")
@@ -685,7 +880,7 @@ class Local:
                     plain = loaded.model.generate
                     loaded.model.generate = lambda *a, **k: plain(*a, stopping_criteria=StoppingCriteriaList([_Stop()]), **k)
                 with _NoGqaWithoutFlash():
-                    text, _ = llm._run_generation(loaded, config, system, user, pil, NUM_PREDICT,
+                    text, _ = llm._run_generation(loaded, config, system, user, pil, budget,
                                                   temperature, top_p, 1.0, -1, 0, True)
                 if cancel is not None and cancel.is_set():
                     raise ForgeError("cancelled", CANCELLED)
@@ -769,6 +964,119 @@ def generate(body, input_directory=None, release_memory=None):
         _CANCELS.pop(request_id, None)
 
 
+def _backend_for(body):
+    kind, _, name = str(body.get("model") or "").partition(":")
+    backend = backends(body.get("settings")).get(kind)
+    if not backend or not name:
+        raise ForgeError("no_model", "Pick a model.")
+    return kind, name, backend
+
+
+def _load_pictures(references, mode, input_directory):
+    """<Picture N> -> base64 JPEG, for every picture on the timeline with a file."""
+    from .helper_minimax_h3_director import resolve_input_path
+    _lines, pictures = format_references(references, mode)
+    return {tag: _image_b64(resolve_input_path(ref["path"], input_directory))
+            for ref, tag in pictures if ref.get("path")}
+
+
+def scan_units(backend, name, units, picture_b64, reader, num_ctx, timeout, stop, force=False):
+    """Descriptions for the units, keyed by their labels: ({labels: text}, how many were scanned).
+
+    A unit the overlay already has a description for is not scanned again;
+    `force` is a rescan, which looks again and runs a little looser so it can
+    come back different. The model stays loaded across the calls; the caller
+    unloads it.
+    """
+    readings, scanned = {}, 0
+    temperature = reader.get("rescan_temperature", 0.6) if force else reader.get("temperature", 0.2)
+    for unit in units:
+        key = ", ".join(unit["labels"])
+        given = None if force else given_reading(unit)
+        if given:
+            readings[key] = given
+            continue
+        images = [picture_b64[label] for label in unit["labels"] if label in picture_b64]
+        if not images:
+            continue
+        text, _stats = backend.chat(name, reader["system"], reading_message(unit), images,
+                                    {"temperature": temperature, "top_p": 0.8}, num_ctx, timeout, stop,
+                                    keep_loaded=True, max_tokens=int(reader.get("max_tokens") or SCAN_TOKENS))
+        scanned += 1
+        reading = usable_reading(text)
+        if reading:
+            readings[key] = reading
+    return readings, scanned
+
+
+def _readings_out(units, readings):
+    return [{"labels": ", ".join(u["labels"]), "pictures": u["pictures"], "text": readings[", ".join(u["labels"])]}
+            for u in units if ", ".join(u["labels"]) in readings]
+
+
+def scan(body, input_directory=None, release_memory=None):
+    """Look at the timeline's pictures ahead of a write. Blocking: call it off the event loop."""
+    import threading
+    request_id = str(body.get("request_id") or "")
+    stop = threading.Event()
+    if request_id:
+        _CANCELS[request_id] = stop
+    try:
+        return _scan(body, input_directory, release_memory, stop)
+    finally:
+        _CANCELS.pop(request_id, None)
+
+
+def _scan(body, input_directory, release_memory, stop):
+    bundle = load_bundle()
+    reader = bundle.get("picture_reader")
+    if not reader or not reader.get("system"):
+        raise ForgeError("scan_off", "This Forge bundle has no picture scanning. Re-export it from PromptForge.")
+    kind, name, backend = _backend_for(body)
+    references = [r for r in (body.get("references") or []) if isinstance(r, dict)]
+    if backend.can_see(name) is False:
+        raise ForgeError("no_vision", f"{name} cannot see pictures, so there is nothing to scan. Pick a vision model.")
+    picture_b64 = _load_pictures(references, "REF2VA", input_directory) if input_directory else {}
+    units = reading_units(references, "REF2VA")
+    only = {int(n) for n in (body.get("pictures") or [])}
+    if only:
+        units = [u for u in units if only & set(u["pictures"])]
+    if not units or not picture_b64:
+        raise ForgeError("no_pictures", "There are no pictures on the timeline to scan.")
+
+    num_ctx = int(body.get("num_ctx") or bundle["context_length"])
+    timeout = int(body.get("timeout") or 600)
+    local_gpu = kind == "local" or _is_this_machine(getattr(backend, "base", "http://127.0.0.1"))
+    if release_memory and local_gpu:
+        release_memory()
+    if kind != "local":
+        _FORGE_LOADED.add((backend, name))
+    started = __import__("time").time()
+    try:
+        readings, scanned = scan_units(backend, name, units, picture_b64, reader, num_ctx, timeout, stop,
+                                       force=bool(body.get("force")))
+    except ForgeError:
+        raise
+    except urlerror.HTTPError as exc:
+        raise ForgeError("backend", f"{kind} returned {exc.code}: {exc.read().decode(errors='replace')[:400]}"
+                         + (" This server may not accept pictures." if 400 <= exc.code < 500 else ""))
+    except (urlerror.URLError, TimeoutError, OSError) as exc:
+        raise ForgeError("backend", f"Could not reach {kind} at {getattr(backend, 'base', '')}: {exc}")
+    except ImportError as exc:
+        raise ForgeError("backend", str(exc))
+    finally:
+        unloaded = backend.unload(name) if kind != "local" else True
+        if unloaded:
+            _FORGE_LOADED.discard((backend, name))
+    return {
+        "readings": _readings_out(units, readings),
+        "scanned": scanned,
+        "model": f"{kind}:{name}",
+        "unloaded": unloaded or not local_gpu,
+        "stats": {"seconds": round(__import__("time").time() - started, 1)},
+    }
+
+
 def _generate(body, input_directory, release_memory, stop):
     bundle = load_bundle()
     mode = body.get("mode")
@@ -777,11 +1085,7 @@ def _generate(body, input_directory, release_memory, stop):
     brief = str(body.get("brief") or "").strip()
     if not brief:
         raise ForgeError("no_brief", "Write what the clip should be first.")
-    kind, _, name = str(body.get("model") or "").partition(":")
-    available = backends(body.get("settings"))
-    backend = available.get(kind)
-    if not backend or not name:
-        raise ForgeError("no_model", "Pick a model.")
+    kind, name, backend = _backend_for(body)
     creativity = body.get("creativity") or bundle["default_creativity"]
     if creativity not in bundle["creativity_presets"]:
         creativity = bundle["default_creativity"]
@@ -790,16 +1094,25 @@ def _generate(body, input_directory, release_memory, stop):
     references = [r for r in (body.get("references") or []) if isinstance(r, dict)]
 
     sees = backend.can_see(name)
-    images = []
-    if sees is not False and input_directory:
-        from .helper_minimax_h3_director import resolve_input_path
-        for ref in references:
-            if ref.get("kind") == "image" and ref.get("path"):
-                images.append(_image_b64(resolve_input_path(ref["path"], input_directory)))
+    picture_b64 = _load_pictures(references, mode, input_directory) if sees is not False and input_directory else {}
+    # In <Picture N> order, which is the order the reference lines number them.
+    labels = list(picture_b64)
+    images = [picture_b64[label] for label in labels]
+
+    # REF2VA with two or more pictures: each is looked at on its own first,
+    # then the prompt is written from the descriptions and the labelled
+    # pictures. One picture has nothing to be confused with.
+    reader = bundle.get("picture_reader") or {}
+    units = reading_units(references, mode) if mode == "REF2VA" and reader.get("system") and len(images) >= 2 else []
 
     spec = bundle["modes"][mode]
     sampling = bundle["creativity_presets"][creativity]
-    num_ctx = int(body.get("num_ctx") or bundle["context_length"])
+    # Sized once, for the write, and used for the scans too: Ollama reloads a
+    # model whose context changes between calls. The descriptions are not
+    # written yet, so each unit is allowed a paragraph.
+    draft = build_user_message(bundle, brief, mode, duration, detail, creativity, references, bool(images))
+    num_ctx = int(body.get("num_ctx") or context_for(
+        bundle["context_length"], len(spec["system"]) + len(draft) + 600 * len(units), len(images)))
     timeout = int(body.get("timeout") or 600)
 
     # ComfyUI's models out first, so the LLM has the card to itself. Only when
@@ -808,21 +1121,30 @@ def _generate(body, input_directory, release_memory, stop):
     if release_memory and local_gpu:
         release_memory()
 
+    readings = {}
+
     def run(with_images):
-        user = build_user_message(bundle, brief, mode, duration, detail, creativity, references, bool(with_images))
-        return backend.chat(name, spec["system"], user, with_images, sampling, num_ctx, timeout, stop)
+        labelled = bool(with_images) and getattr(backend, "labels_pictures", False)
+        user = build_user_message(bundle, brief, mode, duration, detail, creativity, references, bool(with_images),
+                                  picture_lines=reading_lines(units, readings), labelled=labelled)
+        return backend.chat(name, spec["system"], user, with_images, sampling, num_ctx, timeout, stop,
+                            image_labels=labels if labelled else None)
 
     if kind != "local":
         _FORGE_LOADED.add((backend, name))
     started = __import__("time").time()
     try:
         try:
+            if units:
+                readings, _scanned = scan_units(backend, name, units, picture_b64, reader, num_ctx, timeout, stop)
             raw, stats = run(images)
         except urlerror.HTTPError as exc:
             # An OpenAI-compatible server that cannot take images says so with
-            # a 4xx; try once more with words only rather than failing.
+            # a 4xx; try once more with words only rather than failing. The
+            # descriptions the overlay already had still go along.
             if images and sees is None and 400 <= exc.code < 500:
                 images, sees = [], False
+                readings = {", ".join(u["labels"]): given_reading(u) for u in units if given_reading(u)}
                 raw, stats = run([])
             else:
                 raise ForgeError("backend", f"{kind} returned {exc.code}: {exc.read().decode(errors='replace')[:400]}")
@@ -838,6 +1160,7 @@ def _generate(body, input_directory, release_memory, stop):
             _FORGE_LOADED.discard((backend, name))
 
     stats["seconds"] = round(__import__("time").time() - started, 1)
+    stats["num_ctx"] = num_ctx
     segments = parse_segments(raw, spec["segments"])
     fields = builder_fields(segments, mode)
     simple = simple_prompt(fields, mode, duration)
@@ -856,6 +1179,8 @@ def _generate(body, input_directory, release_memory, stop):
         "warnings": warnings,
         "model": f"{kind}:{name}",
         "saw_images": len(images),
+        # What the model saw in each picture, for the overlay's description cards.
+        "readings": _readings_out(units, readings),
         "vision": sees,
         "unloaded": unloaded or not local_gpu,
         "stats": stats,
@@ -901,6 +1226,22 @@ def register_routes():
     async def forge_cancel(request):
         body = await request.json()
         return web.json_response({"cancelled": cancel(body.get("request_id"))})
+
+    @server.routes.post("/dasiwa/h3/forge/scan")
+    async def forge_scan(request):
+        # Same rule as a write: it frees ComfyUI's models, so not while a workflow runs.
+        if server.prompt_queue.get_tasks_remaining() > 0:
+            return web.json_response({"error": "busy", "message": "A workflow is running. Scan the pictures before you queue, or wait for it to finish."}, status=409)
+        try:
+            body = await request.json()
+            result = await asyncio.to_thread(scan, body, folder_paths.get_input_directory(), _release)
+        except ForgeError as exc:
+            return web.json_response({"error": exc.code, "message": exc.message}, status=422)
+        except Exception as exc:
+            log_dasiwa("H3 Forge", f"scan failed: {exc}")
+            return web.json_response({"error": "internal", "message": str(exc)}, status=500)
+        log_dasiwa("H3 Forge", f"{result['model']} scanned {result['scanned']} picture unit(s) in {result['stats']['seconds']}s, unloaded={result['unloaded']}")
+        return web.json_response(result)
 
     @server.routes.post("/dasiwa/h3/forge")
     async def forge(request):
