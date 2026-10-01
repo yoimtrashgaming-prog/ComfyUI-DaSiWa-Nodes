@@ -76,6 +76,19 @@ def test_bundle_has_easy_mode_without_retention():
     assert "Subject definitions" in bundle["modes"][forge.EASY_MODE]["segments"]
 
 
+def test_runaway_is_refused_not_applied():
+    words = " ".join(["absurd ridiculous nonsensical illogical unreasonable"] * 40)
+    good = {"Summary": "A short summary.", "Detailed description": "[Shot 1] She reads. The camera holds."}
+    assert forge.runaway(good) is None
+    assert forge.runaway({**good, "Soundscape": "Room tone. " + words})[0] == "Soundscape"
+    raw = "===SEGMENT: Summary===\nS.\n===SEGMENT: Detailed description===\n[Shot 1] " + words
+    try:
+        forge.parse_segments(raw, ["Summary", "Detailed description", "Soundscape", "Music"])
+        assert False, "expected a runaway error"
+    except forge.ForgeError as exc:
+        assert exc.code == "runaway" and "Soundscape, Music" in exc.message
+
+
 def test_music_only_when_asked():
     bundle = forge.load_bundle()
     segments = {"Music": "Soft piano notes."}

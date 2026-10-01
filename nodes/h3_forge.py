@@ -288,8 +288,30 @@ def parse_segments(text, expected):
         raise ForgeError("refused", f"The model refused: {segments['Refused']}", raw)
     missing = [label for label in expected if label not in segments]
     if missing:
+        # A collapse usually eats the last sections; say what really happened.
+        lost = runaway(segments)
+        if lost:
+            raise ForgeError("runaway", f"The model lost the thread in {lost[0]} (one sentence ran {lost[1]:,} characters) "
+                             f"and never wrote {', '.join(missing)}. Regenerate, or pick a different model.", raw)
         raise ForgeError("missing_segments", f"The model left out: {', '.join(missing)}.", raw)
     return segments
+
+
+# A model that loses the thread writes one endless sentence or a list of
+# synonyms with no full stop. Real prompt sentences measured 80-300
+# characters; collapsed drafts ran 550 to 4,600 (1 Oct 2026).
+RUNAWAY_SENTENCE = 500
+
+
+def runaway(segments):
+    """The first segment holding a sentence too long to be prose, or None."""
+    for label, body in segments.items():
+        if label == "Subject definitions":
+            continue  # written by code in easy mode, and one line per subject otherwise
+        longest = max((len(s) for s in re.split(r"(?<=[.!?])\s+", str(body or ""))), default=0)
+        if longest > RUNAWAY_SENTENCE:
+            return label, longest
+    return None
 
 
 def _bare(body, names):
@@ -713,7 +735,13 @@ class Ollama:
             "model": name, "stream": True, "think": False, "keep_alive": 0,
             "messages": [{"role": "system", "content": system}, message],
             "options": {"num_ctx": num_ctx, "num_predict": NUM_PREDICT,
-                        "temperature": sampling.get("temperature", 0.7), "top_p": sampling.get("top_p", 0.8)},
+                        "temperature": sampling.get("temperature", 0.7), "top_p": sampling.get("top_p", 0.8),
+                        # Always sent, to override a Modelfile's chat default.
+                        # Ollama's qwen3.5:9b ships presence_penalty 1.5, which
+                        # on a prompt this long runs out of "allowed" words and
+                        # writes synonym lists until the token cap: 1 of 4
+                        # drafts usable at 1.5, 4 of 4 at 0 (1 Oct 2026).
+                        "presence_penalty": 0},
         }, timeout, cancel):
             chunk = json.loads(line)
             if chunk.get("error"):
@@ -768,6 +796,9 @@ class OpenAICompatible:
         for line in _stream_lines(self.api + "/chat/completions", {
             "model": name, "stream": True, "stream_options": {"include_usage": True}, "max_tokens": NUM_PREDICT,
             "temperature": sampling.get("temperature", 0.7), "top_p": sampling.get("top_p", 0.8),
+            # Same reason as the Ollama call: a server-side default penalty
+            # turns a long structured answer into word lists.
+            "presence_penalty": 0,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": content}],
             # llama.cpp server honours this; others ignore unknown fields.
             "chat_template_kwargs": {"enable_thinking": False},
@@ -1135,6 +1166,10 @@ def _generate(body, input_directory, release_memory, stop):
 
     stats["seconds"] = round(__import__("time").time() - started, 1)
     segments = parse_segments(raw, spec["segments"])
+    lost = runaway(segments)
+    if lost:
+        raise ForgeError("runaway", f"The model lost the thread in {lost[0]} (one sentence ran {lost[1]:,} characters), "
+                         "so nothing was applied. Regenerate, or pick a different model.", raw)
     easy_warnings = easy_segments(cast, segments) if easy else []
     music_only_when_asked(bundle, brief, segments)
     fields = builder_fields(segments, mode)
