@@ -36,12 +36,16 @@ const GROUPS_KEY = "dasiwaH3ForgeSubjectGroups";
 // REF2VA picture labels, saved on the node by timeline item id. Subject
 // groups (GROUPS_KEY) are still read, to label pictures saved before labels.
 const EASY_ROLES_KEY = "dasiwaH3ForgeEasyRoles";
-const EASY_ROLES = [["character-1", "Character 1"], ["character-2", "Character 2"], ["character-3", "Character 3"], ["character-4", "Character 4"], ["place", "Place"], ["style", "Style"], ["first-frame", "First frame"], ["last-frame", "Last frame"],
-  // A picture with several characters: left to right.
-  ["group-12", "Characters 1 + 2 (1 on the left)"], ["group-21", "Characters 2 + 1 (2 on the left)"],
-  ["group-13", "Characters 1 + 3 (1 on the left)"], ["group-31", "Characters 3 + 1 (3 on the left)"],
-  ["group-23", "Characters 2 + 3 (2 on the left)"], ["group-32", "Characters 3 + 2 (3 on the left)"],
-  ["group-123", "Characters 1 + 2 + 3 (left to right)"]];
+// A picture's label is picked in two steps: what it is, then - for characters
+// only - which one, or which ones left to right. The saved value is one string
+// ("character-2", "group-21", "place"), which is what the server reads.
+const PICTURE_KINDS = [["character", "Character"], ["group", "Several characters"], ["place", "Place"], ["style", "Style"], ["first-frame", "First frame"], ["last-frame", "Last frame"]];
+const PICTURE_WHO = {
+  character: [["character-1", "Character 1"], ["character-2", "Character 2"], ["character-3", "Character 3"], ["character-4", "Character 4"]],
+  group: [["group-12", "1 + 2 (1 on the left)"], ["group-21", "2 + 1 (2 on the left)"], ["group-13", "1 + 3 (1 on the left)"], ["group-31", "3 + 1 (3 on the left)"],
+    ["group-23", "2 + 3 (2 on the left)"], ["group-32", "3 + 2 (3 on the left)"], ["group-123", "1 + 2 + 3 (left to right)"]],
+};
+const pictureKind = label => label.startsWith("character-") ? "character" : label.startsWith("group-") ? "group" : label;
 function forgeHistory(node) {
   const saved = node.properties?.[HISTORY_KEY];
   return Array.isArray(saved) ? saved.filter(entry => entry && typeof entry.simple_prompt === "string" && entry.simple_prompt.trim() && typeof entry.mode === "string" && entry.fields && typeof entry.fields === "object").slice(0, 3) : [];
@@ -94,7 +98,9 @@ function installStyles() {
   .ds-forge .status.error{color:#ff8a8a}
   .ds-forge .muted{color:#8fa3b2;font-size:12px}
   .ds-forge .refs{display:flex;flex-direction:column;gap:6px}
-  .ds-forge .ref{display:grid;grid-template-columns:48px 90px 130px 1fr;gap:8px;align-items:center}
+  .ds-forge .ref{display:grid;grid-template-columns:48px 80px minmax(130px,auto) 1fr;gap:8px;align-items:center}
+  .ds-forge .pick{display:flex;gap:4px}
+  .ds-forge .pick select{width:auto}
   .ds-forge .ref img{width:48px;height:36px;object-fit:cover;border-radius:3px;background:#090d11}
   .ds-forge pre{white-space:pre-wrap;background:#0b1015;border:1px solid #344452;border-radius:4px;padding:8px;margin:0;max-height:320px;overflow:auto;font:12px/1.45 ui-monospace,monospace}
   .ds-forge .history{display:flex;flex-direction:column;gap:5px;border-top:1px solid #344452;padding-top:9px}
@@ -196,14 +202,34 @@ async function open(node) {
       const thumb = ref.kind === "image" ? el("img", { src: viewUrl(ref.path) }) : el("span", { className: "muted", textContent: ref.kind });
       let roleCell;
       if (ref.kind === "image" && labelled) {
-        roleCell = el("select", { title: "What this picture is. Pictures with the same Character number are one character.", onchange: e => {
-          ref.easy_role = e.target.value;
+        const save = value => {
+          ref.easy_role = value;
           node.properties ||= {};
           node.properties[EASY_ROLES_KEY] ||= {};
-          node.properties[EASY_ROLES_KEY][ref.item.id] = e.target.value;
+          node.properties[EASY_ROLES_KEY][ref.item.id] = value;
           node.graph?.setDirtyCanvas(true, true);
-        } });
-        for (const [value, label] of EASY_ROLES) roleCell.append(el("option", { value, textContent: label, selected: ref.easy_role === value }));
+        };
+        const kindSel = el("select", { title: "What this picture is." });
+        for (const [value, label] of PICTURE_KINDS) kindSel.append(el("option", { value, textContent: label, selected: pictureKind(ref.easy_role) === value }));
+        const whoSel = el("select", { title: "Which character. Pictures with the same Character number are one character." });
+        const fillWho = () => {
+          const choices = PICTURE_WHO[pictureKind(ref.easy_role)];
+          whoSel.replaceChildren(...(choices || []).map(([value, label]) => el("option", { value, textContent: label, selected: value === ref.easy_role })));
+          whoSel.hidden = !choices;
+        };
+        // Switching to Character picks a number no other picture uses.
+        const freeCharacter = () => {
+          const used = new Set(refs.filter(r => r !== ref && r.easy_role?.startsWith("character-")).map(r => r.easy_role));
+          return PICTURE_WHO.character.find(([value]) => !used.has(value))?.[0] || "character-1";
+        };
+        kindSel.onchange = e => {
+          const kind = e.target.value;
+          save(kind === "character" ? freeCharacter() : PICTURE_WHO[kind]?.[0][0] || kind);
+          fillWho();
+        };
+        whoSel.onchange = e => save(e.target.value);
+        fillWho();
+        roleCell = el("span", { className: "pick" }, kindSel, whoSel);
       } else {
         roleCell = el("span", { className: "muted", textContent: ref.kind === "image" ? BASE_ROLE[mode] || "frame" : ref.kind === "video" ? `motion · ${ref.stream}` : "voice" });
       }
