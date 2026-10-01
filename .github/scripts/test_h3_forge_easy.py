@@ -76,6 +76,16 @@ def test_bundle_has_easy_mode_without_retention():
     assert "Subject definitions" in bundle["modes"][forge.EASY_MODE]["segments"]
 
 
+def test_style_line_never_guesses_a_medium():
+    shots = "[Shot 1] <Subject 1> reads."
+    guessed = "Live-action, cinematic, warm interior light.\n\n" + shots
+    assert forge.keep_reference_look(guessed, "Character 1 reads") == "Keeps the look of the reference pictures.\n\n" + shots
+    assert forge.keep_reference_look(guessed, "live-action, cinematic: Character 1 reads") == guessed
+    fine = "Keeps the look of the reference pictures, warm indoor light.\n\n" + shots
+    assert forge.keep_reference_look(fine, "Character 1 reads") == fine
+    assert forge.keep_reference_look("[Shot 1] An animated wave.", "x") == "[Shot 1] An animated wave."
+
+
 def test_runaway_is_refused_not_applied():
     words = " ".join(["absurd ridiculous nonsensical illogical unreasonable"] * 40)
     good = {"Summary": "A short summary.", "Detailed description": "[Shot 1] She reads. The camera holds."}

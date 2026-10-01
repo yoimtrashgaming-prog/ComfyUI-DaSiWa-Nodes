@@ -497,6 +497,24 @@ def _sentence(text):
     return t if not t or t[-1] in ".!?" else f"{t}."
 
 
+# Words that name how a video is made. In easy mode the writer has not seen the
+# pictures, so it cannot know any of these; a 4B wrote "Live-action, cinematic"
+# for anime pictures despite being told not to.
+_MEDIUM = re.compile(r"\b(live[- ]action|photo-?real\w*|realistic|anime|cartoon|animated|animation|2d|3d|cgi|pixel art|"
+                     r"watercolou?r|oil painting|claymation|stop[- ]motion|cel[- ]shad\w*|film grain|cinematic)\b", re.I)
+
+
+def keep_reference_look(description, brief):
+    """The style line names no medium the idea did not: it says the pictures' look."""
+    text = str(description or "")
+    head, sep, rest = text.partition("[Shot")
+    found = {m.lower() for m in _MEDIUM.findall(head)}
+    asked = {m.lower() for m in _MEDIUM.findall(str(brief or ""))}
+    if not sep or not head.strip() or not (found - asked):
+        return text
+    return "Keeps the look of the reference pictures.\n\n" + sep + rest
+
+
 def easy_segments(cast, segments):
     """Subject definitions and Retention analysis written in code, into the
     parsed segments. Returns the warnings (a character no shot names)."""
@@ -1171,6 +1189,8 @@ def _generate(body, input_directory, release_memory, stop):
         raise ForgeError("runaway", f"The model lost the thread in {lost[0]} (one sentence ran {lost[1]:,} characters), "
                          "so nothing was applied. Regenerate, or pick a different model.", raw)
     easy_warnings = easy_segments(cast, segments) if easy else []
+    if easy and "Detailed description" in segments:
+        segments["Detailed description"] = keep_reference_look(segments["Detailed description"], brief)
     music_only_when_asked(bundle, brief, segments)
     fields = builder_fields(segments, mode)
     simple = simple_prompt(fields, mode, duration)
