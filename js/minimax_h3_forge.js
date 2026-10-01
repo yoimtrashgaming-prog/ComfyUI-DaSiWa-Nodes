@@ -33,6 +33,11 @@ const openDialogs = new WeakMap();
 const briefs = new Map(); // node id -> last brief, for a reroll after closing
 const HISTORY_KEY = "dasiwaH3ForgeHistory";
 const GROUPS_KEY = "dasiwaH3ForgeSubjectGroups";
+// Easy mode (REF2VA): one label per picture instead of a role and a group.
+// Saved on the node by timeline item id, like the groups.
+const EASY_KEY = "dasiwaH3ForgeEasy";
+const EASY_ROLES_KEY = "dasiwaH3ForgeEasyRoles";
+const EASY_ROLES = [["character-1", "Character 1"], ["character-2", "Character 2"], ["character-3", "Character 3"], ["character-4", "Character 4"], ["place", "Place"], ["style", "Style"], ["first-frame", "First frame"], ["last-frame", "Last frame"]];
 function forgeHistory(node) {
   const saved = node.properties?.[HISTORY_KEY];
   return Array.isArray(saved) ? saved.filter(entry => entry && typeof entry.simple_prompt === "string" && entry.simple_prompt.trim() && typeof entry.mode === "string" && entry.fields && typeof entry.fields === "object").slice(0, 3) : [];
@@ -106,11 +111,12 @@ const BASE_ROLE = { I2VA: "first frame", FL2VA: "first / last frame", L2VA: "las
 function referencesFor(hook, node) {
   const mode = hook.mode();
   const groups = node.properties?.[GROUPS_KEY] || {};
+  const easyRoles = node.properties?.[EASY_ROLES_KEY] || {};
   const laneOrder = { image: 0, video: 1, audio: 2 };
   return hook.items()
     .sort((a, b) => (laneOrder[a.lane] - laneOrder[b.lane]) || (a.slot - b.slot))
     .map(item => {
-      if (item.lane === "image") return { item, kind: "image", path: item.value, role: mode === "REF2VA" ? (item.forge_role || "subject") : "keyframe", subject_group: mode === "REF2VA" ? (groups[item.id] || "") : "" };
+      if (item.lane === "image") return { item, kind: "image", path: item.value, role: mode === "REF2VA" ? (item.forge_role || "subject") : "keyframe", subject_group: mode === "REF2VA" ? (groups[item.id] || "") : "", easy_role: easyRoles[item.id] || "character-1" };
       if (item.lane === "audio" && item.type === "audio") return { item, kind: "audio", duration_seconds: item.duration };
       return { item, kind: "video", role: "motion", stream: item.media_mode === "audio" ? "audio" : item.media_mode === "video_audio" ? "both" : "video", duration_seconds: item.duration };
     });
@@ -150,9 +156,41 @@ async function open(node) {
   const refs = continuity ? [] : referencesFor(hook, node);
   const groupControls = [];
   if (continuity) box.append(el("div", { className: "muted", textContent: "The source ending and Duration guide this draft. A vision model uses tail frames internally; audio is not analyzed. Review the result, then Apply to node." }));
+  // Easy mode: REF2VA with pictures only. Each picture gets one label and the
+  // idea names them ("Character 1 waves at Character 2 in the place"); the
+  // node writes who is who, and no picture goes to the model.
+  const easyOffered = mode === "REF2VA" && refs.some(r => r.kind === "image");
+  let easy = easyOffered && !!node.properties?.[EASY_KEY];
+  const easyBox = easyOffered ? el("input", { type: "checkbox", checked: easy }) : null;
+  const refsBox = el("div", { className: "field" });
+  const placeholder = () => easy
+    ? 'Name the labels: "Character 1 sits on the bed in the place. Character 2 walks in and waves."'
+    : "What should the clip be? A sentence or two is enough.";
+  if (!continuity) brief.placeholder = placeholder();
+  if (easyBox) {
+    easyBox.onchange = () => {
+      easy = easyBox.checked;
+      node.properties ||= {};
+      node.properties[EASY_KEY] = easy;
+      node.graph?.setDirtyCanvas(true, true);
+      brief.placeholder = placeholder();
+      renderRefs();
+    };
+    box.append(el("label", { title: "Label each picture (Character 1, Place, First frame…) and name the labels in the idea. Forge writes who is who; small models do much better this way." },
+      easyBox, " Easy mode — label each picture"));
+  }
   if (refs.length) {
+    box.append(refsBox);
+    renderRefs();
+  } else if (mode !== "T2VA" && !continuity) {
+    box.append(el("div", { className: "muted", textContent: `${mode} expects pictures on the timeline; none are loaded, so the model writes from the idea alone.` }));
+  }
+
+  function renderRefs() {
+    refsBox.replaceChildren();
+    groupControls.length = 0;
     const list = el("div", { className: "refs" });
-    const groupable = mode === "REF2VA" && refs.filter(r => r.kind === "image").length >= 2;
+    const groupable = !easy && mode === "REF2VA" && refs.filter(r => r.kind === "image").length >= 2;
     const groupNote = el("div", { className: "muted" });
     const updateGroupNote = () => {
       const groups = new Map();
@@ -173,7 +211,16 @@ async function open(node) {
       const thumb = ref.kind === "image" ? el("img", { src: viewUrl(ref.path) }) : el("span", { className: "muted", textContent: ref.kind });
       let roleCell;
       let groupCell = null;
-      if (ref.kind === "image" && mode === "REF2VA") {
+      if (ref.kind === "image" && easy) {
+        roleCell = el("select", { title: "What this picture is. Pictures with the same Character number are one character.", onchange: e => {
+          ref.easy_role = e.target.value;
+          node.properties ||= {};
+          node.properties[EASY_ROLES_KEY] ||= {};
+          node.properties[EASY_ROLES_KEY][ref.item.id] = e.target.value;
+          node.graph?.setDirtyCanvas(true, true);
+        } });
+        for (const [value, label] of EASY_ROLES) roleCell.append(el("option", { value, textContent: label, selected: ref.easy_role === value }));
+      } else if (ref.kind === "image" && mode === "REF2VA") {
         roleCell = el("select", { onchange: e => {
           ref.role = e.target.value;
           ref.item.forge_role = e.target.value;
@@ -208,17 +255,17 @@ async function open(node) {
       } else {
         roleCell = el("span", { className: "muted", textContent: ref.kind === "image" ? BASE_ROLE[mode] || "frame" : ref.kind === "video" ? `motion · ${ref.stream}` : "voice" });
       }
-      const keep = el("input", { type: "text", placeholder: "keep (optional)", oninput: e => { ref.keep = e.target.value.trim(); } });
+      const keep = el("input", { type: "text", placeholder: "keep (optional)", value: ref.keep || "", oninput: e => { ref.keep = e.target.value.trim(); } });
       list.append(el("div", { className: groupable ? "ref has-group" : "ref" }, thumb, el("span", { textContent: name }), roleCell, ...(groupable ? [groupCell || el("span")] : []), ref.kind === "audio" ? el("span") : keep));
     }
-    box.append(el("div", { className: "field" }, el("label", { textContent: "References on the timeline" }), list));
-    if (groupable) {
+    refsBox.append(el("label", { textContent: "References on the timeline" }), list);
+    if (easy) {
+      refsBox.append(el("span", { className: "muted", textContent: 'Pictures with the same Character number are one character. In the idea, write "Character 1", "Character 2" and "the place". The pictures are not sent to the model: H3 sees them itself.' }));
+    } else if (groupable) {
       updateGroupNote();
-      box.append(el("div", { className: "field" }, el("label", { textContent: "Subject-aware grouping (optional)" }),
-        el("span", { className: "muted", textContent: "Assign the same Subject letter to pictures of the same person or object. Separate leaves each picture independent; two pictures are needed for a group." }), groupNote));
+      refsBox.append(el("label", { textContent: "Subject-aware grouping (optional)" }),
+        el("span", { className: "muted", textContent: "Assign the same Subject letter to pictures of the same person or object. Separate leaves each picture independent; two pictures are needed for a group." }), groupNote);
     }
-  } else if (mode !== "T2VA" && !continuity) {
-    box.append(el("div", { className: "muted", textContent: `${mode} expects pictures on the timeline; none are loaded, so the model writes from the idea alone.` }));
   }
 
   const modelSel = el("select");
@@ -238,10 +285,10 @@ async function open(node) {
   box.append(output);
   const historyBox = el("div", { className: "history" });
   box.append(historyBox);
-  const referenceControls = Array.from(box.querySelectorAll(".refs input, .refs select"));
-  const controls = [brief, modelSel, detail, creativity, ...referenceControls];
+  // Looked up each time: the reference rows are redrawn when Easy mode toggles.
   const setControlsDisabled = disabled => {
-    controls.forEach(c => { c.disabled = disabled; });
+    [brief, modelSel, detail, creativity, easyBox, ...refsBox.querySelectorAll("input, select")]
+      .filter(Boolean).forEach(c => { c.disabled = disabled; });
     if (!disabled) groupControls.forEach(([control, ref]) => { control.disabled = ref.role !== "subject"; });
   };
   setControlsDisabled(true);
@@ -335,7 +382,9 @@ async function open(node) {
   modelSel.addEventListener("change", clearDraft);
   creativity.addEventListener("change", clearDraft);
   detail.addEventListener("input", clearDraft);
-  referenceControls.forEach(c => c.addEventListener(c.tagName === "SELECT" ? "change" : "input", clearDraft));
+  refsBox.addEventListener("change", clearDraft);
+  refsBox.addEventListener("input", clearDraft);
+  easyBox?.addEventListener("change", clearDraft);
   genBtn.onclick = async () => {
     if (closed) return;
     if (running) { cancelRun(); genBtn.disabled = true; setStatus("Cancelling… the model stops at its next token, then unloads."); return; }
@@ -360,7 +409,7 @@ async function open(node) {
         body: JSON.stringify({
           request_id: requestId, brief: text, mode, duration: hook.duration(), model: modelSel.value,
           detail: Number(detail.value), creativity: creativity.value,
-          references: refs.map(({ item, ...r }) => r), settings: forgeSettings(), continuity,
+          references: refs.map(({ item, ...r }) => r), settings: forgeSettings(), continuity, easy,
         }),
       });
       const data = await res.json();

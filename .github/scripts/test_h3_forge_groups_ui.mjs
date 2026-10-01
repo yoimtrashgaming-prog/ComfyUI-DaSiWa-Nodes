@@ -26,4 +26,10 @@ const base = vm.runInContext(`referencesFor({ mode: () => "I2VA", items: () => [
   { id: "p1", lane: "image", slot: 0, value: "a.png" },
 ] }, { properties: { dasiwaH3ForgeSubjectGroups: { p1: "A" } } })`, context);
 assert.equal(base[0].subject_group, "");
+// Easy mode labels come off the node by item id; unlabelled pictures are Character 1.
+const easy = vm.runInContext(`referencesFor({ mode: () => "REF2VA", items: () => [
+  { id: "p1", lane: "image", slot: 0, value: "a.png" },
+  { id: "p2", lane: "image", slot: 1, value: "b.png" },
+] }, { properties: { dasiwaH3ForgeEasyRoles: { p2: "place" } } })`, context);
+assert.deepEqual(Array.from(easy, r => r.easy_role), ["character-1", "place"]);
 console.log("Forge reference mapping: PASS");

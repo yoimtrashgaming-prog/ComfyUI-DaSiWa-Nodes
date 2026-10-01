@@ -1,0 +1,87 @@
+"""REF2VA Forge easy mode: labelled pictures, code-written cast, music only when asked."""
+import importlib.util
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "nodes"))
+spec = importlib.util.spec_from_file_location("h3_forge_test", ROOT / "nodes" / "h3_forge.py")
+forge = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(forge)
+
+
+def pic(easy_role, **extra):
+    return {"kind": "image", "role": "subject", "easy_role": easy_role, **extra}
+
+
+REFS = [pic("character-2"), pic("place"), pic("character-1", keep="tired"), pic("character-2"), pic("first-frame")]
+
+
+def test_cast_numbers_characters_then_place_and_lists_frames_apart():
+    cast = forge.easy_cast(REFS)
+    assert [(s["tag"], s["name"], s["pictures"]) for s in cast["subjects"]] == [
+        ("<Subject 1>", "Character 1", [3]), ("<Subject 2>", "Character 2", [1, 4]), ("<Subject 3>", "the place", [2])]
+    assert [(f["picture"], f["which"]) for f in cast["frames"]] == [(5, "first")]
+
+
+def test_unknown_label_is_character_1():
+    assert forge.easy_cast([pic("dragon")])["subjects"][0]["name"] == "Character 1"
+
+
+def test_brief_names_become_tags():
+    cast = forge.easy_cast(REFS)
+    assert forge.easy_brief("Character 1 pours tea for character 2 in the place while Character 3 waits", cast) == \
+        "<Subject 1> pours tea for <Subject 2> in <Subject 3> while Character 3 waits"
+    assert forge.easy_brief("It takes place at night, in place of the party.", cast) == "It takes place at night, in place of the party."
+    assert forge.easy_brief("outfit from picture 4, not image 9, and <Picture 2>", cast) == "outfit from <Picture 4>, not image 9, and <Picture 2>"
+
+
+def test_user_message_has_cast_not_picture_lines_and_no_attached_claim():
+    message = forge.build_user_message(forge.load_bundle(), "Character 1 waves", "REF2VA", 10, 5, "balanced",
+                                       REFS + [{"kind": "audio", "duration_seconds": 4}], False, forge.easy_cast(REFS))
+    assert 'Brief: "<Subject 1> waves"' in message
+    assert '<Subject 2> is "Character 2" in the brief, a character, shown in <Picture 1> and <Picture 4>' in message
+    assert "keep: tired" in message
+    assert "<Picture 5> is the first frame" in message
+    assert "<Audio 1>" in message
+    assert "- <Picture 1> ·" not in message
+    assert "is attached" not in message
+
+
+def test_segments_written_in_code():
+    cast = forge.easy_cast(REFS)
+    segments = {
+        "Subject definitions": "<Subject 1>: tired, slow blinks\n<Subject 2> — stiff and formal",
+        "Summary": "S.",
+        "Detailed description": "integrated_multimodal_description: Style.\n\n[Shot 1] <Subject 3>, <Subject 1> sits.\n\n[Shot 2] At 00:03.000, <Subject 1> pours.",
+        "Soundscape": "Rain.", "Music": "Koto.",
+    }
+    warnings = forge.easy_segments(cast, segments)
+    defs, ret = segments["Subject definitions"], segments["Retention analysis"]
+    assert defs.startswith("<Subject 1> is the character in <Picture 3>; keep their appearance exactly as the pictures show. In this scene: tired, slow blinks.")
+    assert "<Subject 2> is the character in <Picture 1> and <Picture 4>;" in defs
+    assert "<Subject 3> is the place in <Picture 2>, where the video happens" in defs
+    assert "<Picture 5> is the first frame of [Shot 1]." in defs
+    assert "<Subject 1> (appears in [Shot 1]-[Shot 2])" in ret
+    assert "<Subject 3> (appears in [Shot 1]-[Shot 2])" in ret
+    assert "tired" not in ret
+    assert len(warnings) == 1 and "Character 2" in warnings[0]
+    fields = forge.builder_fields(segments, "REF2VA")
+    assert fields["ref"]["retention_analysis"] == ret
+
+
+def test_bundle_has_easy_mode_without_retention():
+    bundle = forge.load_bundle()
+    assert "Retention analysis" not in bundle["modes"][forge.EASY_MODE]["segments"]
+    assert "Subject definitions" in bundle["modes"][forge.EASY_MODE]["segments"]
+
+
+def test_music_only_when_asked():
+    bundle = forge.load_bundle()
+    segments = {"Music": "Soft piano notes."}
+    assert forge.music_only_when_asked(bundle, "She reads on the bed.", segments) and segments["Music"] == "N/A"
+    segments = {"Music": "Soft piano notes."}
+    assert not forge.music_only_when_asked(bundle, "Soft piano music plays.", segments) and segments["Music"].startswith("Soft")
+    segments = {"Music": "Soft piano notes."}
+    assert not forge.music_only_when_asked({"music_words": None}, "She reads.", segments)
+    assert not forge.music_only_when_asked(bundle, "It takes place at night.", {"Music": "N/A"})
