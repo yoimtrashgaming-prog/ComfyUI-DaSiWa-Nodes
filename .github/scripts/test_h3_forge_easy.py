@@ -24,6 +24,23 @@ def test_cast_numbers_characters_then_place_and_lists_frames_apart():
     assert [(f["picture"], f["which"]) for f in cast["frames"]] == [(5, "first")]
 
 
+def test_group_picture_places_each_character():
+    refs = [pic("character-1"), pic("group-21"), pic("place"), pic("group-123")]
+    cast = forge.easy_cast(refs)
+    by = {s["name"]: s for s in cast["subjects"]}
+    assert by["Character 1"]["pictures"] == [1]
+    assert by["Character 1"]["placements"] == [{"picture": 2, "position": "right"}, {"picture": 4, "position": "left"}]
+    assert by["Character 3"]["tag"] == "<Subject 3>" and by["Character 3"]["pictures"] == []
+    assert by["the place"]["tag"] == "<Subject 4>"
+    lines = "\n".join(forge.easy_lines(cast))
+    assert '<Subject 1> is "Character 1" in the brief, a character, shown in <Picture 1>, and on the right in <Picture 2> and on the left in <Picture 4>' in lines
+    assert '<Subject 3> is "Character 3" in the brief, a character, shown on the right in <Picture 4>' in lines
+    segments = {"Detailed description": "[Shot 1] <Subject 1>, <Subject 2> and <Subject 3> in <Subject 4>."}
+    forge.easy_segments(cast, segments)
+    assert "<Subject 2> is the character on the left in <Picture 2> and in the middle in <Picture 4>;" in segments["Subject definitions"]
+    assert forge.easy_brief("Character 2 waves", cast) == "<Subject 2> waves"
+
+
 def test_unknown_label_is_character_1():
     assert forge.easy_cast([pic("dragon")])["subjects"][0]["name"] == "Character 1"
 

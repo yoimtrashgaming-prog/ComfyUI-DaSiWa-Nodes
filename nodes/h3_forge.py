@@ -378,8 +378,13 @@ def group_warnings(subject_definitions, references):
 # 2026, on two characters (one in two pictures) and a place: a 9B went 0/5
 # without easy mode and 5/5 with it, and a 4B 5/5 in 4-5 s a run.
 
-EASY_ROLES = ("character-1", "character-2", "character-3", "character-4", "place", "style", "first-frame", "last-frame")
+# "group-21" is a picture with Characters 2 and 1 in it, 2 on the left: the
+# digits are the characters, left to right. The model never sees the picture,
+# so position is what tells them apart; H3 sees it and is told who is where.
+GROUP_ROLES = ("group-12", "group-21", "group-13", "group-31", "group-23", "group-32", "group-123")
+EASY_ROLES = ("character-1", "character-2", "character-3", "character-4", "place", "style", "first-frame", "last-frame") + GROUP_ROLES
 EASY_MODE = "REF2VA easy"
+_POSITIONS = {2: ("left", "right"), 3: ("left", "middle", "right")}
 
 
 def _easy_role(ref):
@@ -390,14 +395,26 @@ def _easy_role(ref):
 def easy_cast(references):
     """Subjects numbered characters first, then the place, then the style.
 
-    Returns {"subjects": [{tag, kind, name, number, pictures, refs}],
-    "frames": [{picture, which, ref}]}; picture numbers count images only.
+    Returns {"subjects": [{tag, kind, name, number, pictures, placements, refs}],
+    "frames": [{picture, which, ref}]}; picture numbers count images only. A
+    character's `pictures` are its own; `placements` are group pictures it
+    shares, as [{picture, position}].
     """
     chars, place, style, frames = {}, {"pictures": [], "refs": []}, {"pictures": [], "refs": []}, []
+
+    def char(num):
+        return chars.setdefault(num, {"pictures": [], "placements": [], "refs": []})
+
     for n, ref in enumerate(_images(references), 1):
         role = _easy_role(ref)
+        if role.startswith("group-"):
+            nums = [int(d) for d in role.split("-", 1)[1]]
+            for num, position in zip(nums, _POSITIONS[len(nums)]):
+                char(num)["placements"].append({"picture": n, "position": position})
+                char(num)["refs"].append(ref)
+            continue
         if role.startswith("character-"):
-            entry = chars.setdefault(int(role.rsplit("-", 1)[1]), {"pictures": [], "refs": []})
+            entry = char(int(role.rsplit("-", 1)[1]))
         elif role in ("place", "style"):
             entry = place if role == "place" else style
         else:
@@ -415,9 +432,20 @@ def easy_cast(references):
     return {"subjects": subjects, "frames": frames}
 
 
+def _join_and(items):
+    return " and ".join(items) if len(items) <= 2 else f"{', '.join(items[:-1])} and {items[-1]}"
+
+
 def _picture_list(pictures):
-    tags = [f"<Picture {p}>" for p in pictures]
-    return " and ".join(tags) if len(tags) <= 2 else f"{', '.join(tags[:-1])} and {tags[-1]}"
+    return _join_and([f"<Picture {p}>" for p in pictures])
+
+
+def _shown_in(s):
+    """Where a subject is shown: "in <Picture 1>, and on the left in <Picture 3>"."""
+    own = f"in {_picture_list(s['pictures'])}" if s["pictures"] else ""
+    shared = _join_and([f"{'in' if p['position'] == 'middle' else 'on'} the {p['position']} in <Picture {p['picture']}>"
+                        for p in s.get("placements", [])])
+    return f"{own}, and {shared}" if own and shared else own or shared
 
 
 def easy_brief(brief, cast):
@@ -425,7 +453,9 @@ def easy_brief(brief, cast):
     -> <Picture 3>. Only what the cast has; a bare "place" ("takes place") stays."""
     by_number = {s["number"]: s["tag"] for s in cast["subjects"] if s["kind"] == "character"}
     place = next((s["tag"] for s in cast["subjects"] if s["kind"] == "place"), None)
-    last = max([p for s in cast["subjects"] for p in s["pictures"]] + [f["picture"] for f in cast["frames"]] + [0])
+    last = max([p for s in cast["subjects"] for p in s["pictures"]]
+               + [p["picture"] for s in cast["subjects"] for p in s.get("placements", [])]
+               + [f["picture"] for f in cast["frames"]] + [0])
     text = re.sub(r"\b(?:character|char)\s*#?\s*([1-4])\b",
                   lambda m: by_number.get(int(m.group(1)), m.group(0)), str(brief), flags=re.I)
     if place:
@@ -456,7 +486,7 @@ def easy_lines(cast):
         tail = f" · {extra}" if extra else ""
         pics = _picture_list(s["pictures"])
         if s["kind"] == "character":
-            lines.append(f'- {s["tag"]} is "{s["name"]}" in the brief, a character, shown in {pics}{tail}')
+            lines.append(f'- {s["tag"]} is "{s["name"]}" in the brief, a character, shown {_shown_in(s)}{tail}')
         elif s["kind"] == "place":
             lines.append(f"- {s['tag']} is the place, shown in {pics}. The shots happen here; anyone else in it is part of the place, not a subject{tail}")
         else:
@@ -528,7 +558,7 @@ def easy_segments(cast, segments):
         cited = [n for n in every if s["tag"] in shots[n]]
         if s["kind"] == "character":
             act = _sentence(acting.get(s["tag"]))
-            definitions.append(f"{s['tag']} is the character in {pics}; keep their appearance exactly as the pictures show."
+            definitions.append(f"{s['tag']} is the character {_shown_in(s)}; keep their appearance exactly as the pictures show."
                                + (f" In this scene: {act}" if act else ""))
             if every and not cited:
                 warnings.append(f"{s['name']} ({s['tag']}) is never named in a shot. Check detailed_description, or say in the idea what {s['name']} does.")
@@ -742,7 +772,14 @@ class Ollama:
             _http(self.base + "/api/generate", {"model": name, "keep_alive": 0}, timeout=30)
         except Exception as exc:
             log_dasiwa("H3 Forge", f"unload of {name} failed: {exc}")
-        return name not in self.loaded()
+        # Ollama unloads in the background; checking at once reported a model
+        # "still loaded" that was gone a second later.
+        import time
+        for _ in range(10):
+            if name not in self.loaded():
+                return True
+            time.sleep(0.5)
+        return False
 
     def chat(self, name, system, user, images_b64, sampling, num_ctx, timeout, cancel=None):
         message = {"role": "user", "content": user}
@@ -1128,7 +1165,7 @@ def _generate(body, input_directory, release_memory, stop):
     # for it to do. A bundle exported before it existed cannot write it.
     easy = bool(body.get("easy")) and mode == "REF2VA"
     if easy and EASY_MODE not in bundle["modes"]:
-        raise ForgeError("bad_mode", "This copy of data/h3_forge.json predates easy mode. Update the node pack, or turn Easy mode off.")
+        raise ForgeError("bad_mode", "This copy of data/h3_forge.json predates picture labels. Update the node pack.")
     cast = easy_cast(references) if easy else None
 
     sees = backend.can_see(name)

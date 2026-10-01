@@ -26,10 +26,21 @@ const base = vm.runInContext(`referencesFor({ mode: () => "I2VA", items: () => [
   { id: "p1", lane: "image", slot: 0, value: "a.png" },
 ] }, { properties: { dasiwaH3ForgeSubjectGroups: { p1: "A" } } })`, context);
 assert.equal(base[0].subject_group, "");
-// Easy mode labels come off the node by item id; unlabelled pictures are Character 1.
-const easy = vm.runInContext(`referencesFor({ mode: () => "REF2VA", items: () => [
+// Picture labels come off the node by item id; an unlabelled picture gets the
+// next free Character number.
+const labels = vm.runInContext(`referencesFor({ mode: () => "REF2VA", items: () => [
   { id: "p1", lane: "image", slot: 0, value: "a.png" },
   { id: "p2", lane: "image", slot: 1, value: "b.png" },
-] }, { properties: { dasiwaH3ForgeEasyRoles: { p2: "place" } } })`, context);
-assert.deepEqual(Array.from(easy, r => r.easy_role), ["character-1", "place"]);
+  { id: "p3", lane: "image", slot: 2, value: "c.png" },
+] }, { properties: { dasiwaH3ForgeEasyRoles: { p2: "place", p3: "character-1" } } })`, context);
+assert.deepEqual(Array.from(labels, r => r.easy_role), ["character-2", "place", "character-1"]);
+// A node saved with subject groups: a group becomes one Character, each
+// ungrouped picture its own.
+const carried = vm.runInContext(`referencesFor({ mode: () => "REF2VA", items: () => [
+  { id: "p1", lane: "image", slot: 0, value: "a.png" },
+  { id: "p2", lane: "image", slot: 1, value: "b.png" },
+  { id: "p3", lane: "image", slot: 2, value: "c.png" },
+] }, { properties: { dasiwaH3ForgeSubjectGroups: { p1: "A", p3: "A" } } })`, context);
+assert.deepEqual(Array.from(carried, r => r.easy_role), ["character-1", "character-2", "character-1"]);
+assert.equal(base[0].easy_role, undefined);
 console.log("Forge reference mapping: PASS");
