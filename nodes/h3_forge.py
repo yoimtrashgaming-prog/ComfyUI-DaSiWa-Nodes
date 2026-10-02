@@ -1111,12 +1111,16 @@ def _generate(body, input_directory, release_memory, stop):
 
     spec = bundle["modes"][mode]
     sampling = bundle["creativity_presets"][creativity]
+    # "Descriptions only": once every picture is described, the write gets the
+    # descriptions and no pictures. For models too small to hold the
+    # instructions and several pictures at once; the scans still look at them.
+    text_only = bool(units) and body.get("writer_pictures") is False
     # Sized once, for the write, and used for the scans too: Ollama reloads a
     # model whose context changes between calls. The descriptions are not
     # written yet, so each unit is allowed a paragraph.
-    draft = build_user_message(bundle, brief, mode, duration, detail, creativity, references, bool(images))
+    draft = build_user_message(bundle, brief, mode, duration, detail, creativity, references, bool(images) and not text_only)
     num_ctx = int(body.get("num_ctx") or context_for(
-        bundle["context_length"], len(spec["system"]) + len(draft) + 600 * len(units), len(images)))
+        bundle["context_length"], len(spec["system"]) + len(draft) + 600 * len(units), 0 if text_only else len(images)))
     timeout = int(body.get("timeout") or 600)
 
     # ComfyUI's models out first, so the LLM has the card to itself. Only when
@@ -1141,7 +1145,9 @@ def _generate(body, input_directory, release_memory, stop):
         try:
             if units:
                 readings, _scanned = scan_units(backend, name, units, picture_b64, reader, num_ctx, timeout, stop)
-            raw, stats = run(images)
+            # Only when every picture really has a description to write from.
+            described = all(", ".join(u["labels"]) in readings for u in units)
+            raw, stats = run([] if text_only and described else images)
         except urlerror.HTTPError as exc:
             # An OpenAI-compatible server that cannot take images says so with
             # a 4xx; try once more with words only rather than failing. The
