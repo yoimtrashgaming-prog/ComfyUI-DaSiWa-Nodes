@@ -19,6 +19,7 @@ import asyncio
 import base64
 import io
 import json
+import math
 import os
 import re
 import threading
@@ -215,9 +216,10 @@ def scale_detail_rule(rule, duration):
     return out.replace(", the reference guide's own range", f" for this {float(duration):g}-second clip")
 
 
-def build_user_message(bundle, brief, mode, duration, detail, creativity, references, carries_image, cast=None):
+def build_user_message(bundle, brief, mode, duration, detail, creativity, references, carries_image, cast=None, shots=None):
     """`cast` is easy mode's (easy_cast): the brief's names become tags and the
-    cast block replaces the picture lines; video and audio keep theirs."""
+    cast block replaces the picture lines; video and audio keep theirs.
+    `shots` is the Shots control: "Auto" or None sends nothing."""
     if cast is not None:
         brief = easy_brief(brief, cast)
     lines = [f'Brief: "{str(brief).strip()}"']
@@ -225,6 +227,8 @@ def build_user_message(bundle, brief, mode, duration, detail, creativity, refere
     if duration:
         settings.append(f"Duration: {duration} sec")
     lines.append(f"Settings (context for how to write, never text to include): {' · '.join(settings)}")
+    if shots_line(shots):
+        lines.append(shots_line(shots))
 
     preset = bundle["creativity_presets"].get(creativity)
     if preset and preset.get("rule"):
@@ -593,6 +597,97 @@ def music_only_when_asked(bundle, brief, segments):
         return False
     segments["Music"] = "N/A"
     return True
+
+
+# ── Shots: a picked count, cut times that can play, and the count checked ──
+# A port of PromptForge's server/shots.mjs. Measured there on eight models:
+# "single shot" in the idea still came back as two or three shots on the small
+# ones, and with a count picked every model wrote exactly that many. The small
+# ones also put the last cut ON the final second ("At 00:10.000" in a 10 s
+# clip), a shot that never plays; code moves those, since arithmetic about its
+# own output is not something a small model does reliably.
+
+def shot_count(shots):
+    """The picked count as an int, or None for Auto / nothing picked."""
+    try:
+        n = int(shots)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+def shots_line(shots):
+    """The instruction for the user message, or None when nothing was picked."""
+    n = shot_count(shots)
+    if not n:
+        return None
+    override = "This overrides any shot count in the detail level, the idea or the guide's examples."
+    if n == 1:
+        return f"Shots: 1 — one continuous shot. Write only [Shot 1]: no cuts and no later timestamps. {override}"
+    return f"Shots: {n} — exactly {n} shots, [Shot 1] to [Shot {n}], no more and no fewer. {override}"
+
+
+_CUT = re.compile(r"(\[Shot\s+\d+\]\s*At\s+)(\d+):(\d+(?:\.\d+)?)", re.I)
+
+
+def _stamp(seconds):
+    t = math.floor(seconds * 10 + 0.5) / 10
+    return f"{int(t // 60):02d}:{t % 60:06.3f}"
+
+
+def repair_cut_times(duration, segments):
+    """Move cuts at or past the end of the clip, or not after the cut before
+    them, evenly into the gap they belong in: [1.8, 4.2, 7.6, 10] in 10 s
+    becomes [..., 7.6, 8.8]. Only the timestamp changes. Edits `segments` in
+    place and returns the (from, to) pairs it moved."""
+    try:
+        end = float(duration)
+    except (TypeError, ValueError):
+        return []
+    body = segments.get("Detailed description")
+    if not body or end <= 0:
+        return []
+    cuts = [int(m.group(2)) * 60 + float(m.group(3)) for m in _CUT.finditer(body)]
+    fixed = list(cuts)
+    prev, i = 0.0, 0
+    while i < len(cuts):
+        if prev < cuts[i] < end:
+            prev, i = cuts[i], i + 1
+            continue
+        # A run of bad cuts, up to the next one that is good where it stands.
+        j = i
+        while j < len(cuts) and not (prev < cuts[j] < end):
+            j += 1
+        upper = cuts[j] if j < len(cuts) else end
+        for k in range(i, j):
+            fixed[k] = prev + (upper - prev) * (k - i + 1) / (j - i + 1)
+        prev, i = fixed[j - 1], j
+    moved = [(_stamp(a), _stamp(b)) for a, b in zip(cuts, fixed) if _stamp(a) != _stamp(b)]
+    if not moved:
+        return []
+    remaining = iter(fixed)
+
+    def put(m):
+        now = next(remaining)
+        was = int(m.group(2)) * 60 + float(m.group(3))
+        return m.group(0) if _stamp(was) == _stamp(now) else f"{m.group(1)}{_stamp(now)}"
+
+    segments["Detailed description"] = _CUT.sub(put, body)
+    return moved
+
+
+def shot_count_warning(shots, segments):
+    """A warning when the model wrote a different number of shots than was
+    picked, or None."""
+    n = shot_count(shots)
+    body = segments.get("Detailed description")
+    if not n or body is None:
+        return None
+    got = len(set(re.findall(r"\[Shot\s+(\d+)\]", body, re.I)))
+    if got == n:
+        return None
+    return (f"You asked for {n} shot{'' if n == 1 else 's'} and the model wrote {got}. "
+            "Regenerate, or edit the description before you apply it.")
 
 
 # ── Simple prompt mode: a port of PromptForge's server/h3-simple.mjs ──────
@@ -1160,6 +1255,7 @@ def _generate(body, input_directory, release_memory, stop):
         creativity = bundle["default_creativity"]
     detail = body.get("detail") or bundle["default_detail"]
     duration = body.get("duration")
+    shots = body.get("shots")
     references = [r for r in (body.get("references") or []) if isinstance(r, dict)]
     # Easy mode is REF2VA with labelled pictures; the base modes have nothing
     # for it to do. A bundle exported before it existed cannot write it.
@@ -1189,7 +1285,7 @@ def _generate(body, input_directory, release_memory, stop):
         release_memory()
 
     def run(with_images):
-        user = build_user_message(bundle, brief, mode, duration, detail, creativity, references, bool(with_images), cast)
+        user = build_user_message(bundle, brief, mode, duration, detail, creativity, references, bool(with_images), cast, shots)
         return backend.chat(name, spec["system"], user, with_images, sampling, num_ctx, timeout, stop)
 
     if kind != "local":
@@ -1229,9 +1325,14 @@ def _generate(body, input_directory, release_memory, stop):
     if easy and "Detailed description" in segments:
         segments["Detailed description"] = keep_reference_look(segments["Detailed description"], brief)
     music_only_when_asked(bundle, brief, segments)
+    moved = repair_cut_times(duration, segments)
+    if moved:
+        log_dasiwa("H3 Forge", "moved cut " + ", ".join(f"{a} -> {b}" for a, b in moved))
     fields = builder_fields(segments, mode)
     simple = simple_prompt(fields, mode, duration)
     warnings = check_prompt(fields, mode, duration, simple, bundle["max_output_chars"]) + easy_warnings
+    if shot_count_warning(shots, segments):
+        warnings.append(shot_count_warning(shots, segments))
     if mode == "REF2VA" and not easy:
         warnings += group_warnings(fields["ref"]["subject_definitions"], references)
     if not unloaded and local_gpu:
@@ -1410,6 +1511,9 @@ def register_routes():
             "creativity": list(bundle["creativity_presets"].keys()),
             "default_detail": bundle["default_detail"],
             "default_creativity": bundle["default_creativity"],
+            # A bundle exported before the Shots control has none: Auto only.
+            "shot_counts": bundle.get("shot_counts") or ["Auto"],
+            "default_shots": bundle.get("default_shots") or "Auto",
         })
 
     @server.routes.post("/dasiwa/h3/forge/cancel")

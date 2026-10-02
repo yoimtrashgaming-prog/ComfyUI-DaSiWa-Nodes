@@ -1,6 +1,6 @@
 {
   "source": "PromptForge",
-  "exported_at": "2026-10-01T07:04:56.608Z",
+  "exported_at": "2026-10-02T20:20:22.489Z",
   "max_output_chars": 7000,
   "context_length": 16384,
   "durations": [
@@ -10,6 +10,15 @@
     12,
     15
   ],
+  "shot_counts": [
+    "Auto",
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "default_shots": "Auto",
   "default_detail": 5,
   "default_creativity": "balanced",
   "detail_levels": {

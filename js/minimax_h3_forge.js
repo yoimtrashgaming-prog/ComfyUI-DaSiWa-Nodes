@@ -248,9 +248,12 @@ async function open(node) {
   const detail = el("input", { type: "range", min: 1, max: 10, step: 1 });
   const detailLabel = el("span", { className: "muted" });
   const creativity = el("select");
+  // Auto lets the model choose; a number is an instruction the server checks.
+  const shots = el("select", { title: "How many shots. Auto lets the model choose." });
   box.append(el("div", { className: "row" },
     el("div", { className: "field" }, el("label", { textContent: "Model" }), modelSel),
-    el("div", { className: "field" }, el("label", { textContent: "Creativity" }), creativity)));
+    el("div", { className: "field" }, el("label", { textContent: "Creativity" }), creativity),
+    el("div", { className: "field" }, el("label", { textContent: "Shots" }), shots)));
   box.append(el("div", { className: "field" }, el("label", {}, "Detail ", detailLabel), detail));
   const status = el("span", { className: "status" });
   const setStatus = (msg, err = false) => { status.textContent = msg; status.classList.toggle("error", err); };
@@ -262,7 +265,7 @@ async function open(node) {
   const historyBox = el("div", { className: "history" });
   box.append(historyBox);
   const setControlsDisabled = disabled => {
-    [brief, modelSel, detail, creativity, ...refsBox.querySelectorAll("input, select")]
+    [brief, modelSel, detail, creativity, shots, ...refsBox.querySelectorAll("input, select")]
       .forEach(c => { c.disabled = disabled; });
   };
   setControlsDisabled(true);
@@ -271,9 +274,12 @@ async function open(node) {
     if (closed) return;
     brief.value = entry.brief || "";
     if (entry.draftOptions) {
-      const { model, detail: level, creativity: preset } = entry.draftOptions;
+      const { model, detail: level, creativity: preset, shots: count } = entry.draftOptions;
       if (Array.from(modelSel.options).some(o => o.value === model)) modelSel.value = model;
       detail.value = level; creativity.value = preset;
+      // Drafts saved before the Shots control have none: they were Auto.
+      const shotsValue = String(count ?? "Auto");
+      if (Array.from(shots.options).some(o => o.value === shotsValue)) shots.value = shotsValue;
       if (detail.oninput) detail.oninput();
     }
     result = entry;
@@ -333,6 +339,9 @@ async function open(node) {
     creativity.value = prefs.creativity && data.creativity.includes(prefs.creativity) ? prefs.creativity : data.default_creativity;
     levels = data.detail_levels;
     detail.value = prefs.detail || data.default_detail;
+    const counts = (data.shot_counts || ["Auto"]).map(String);
+    for (const c of counts) shots.append(el("option", { value: c, textContent: c }));
+    shots.value = prefs.shots && counts.includes(String(prefs.shots)) ? String(prefs.shots) : String(data.default_shots || "Auto");
     genBtn.disabled = false;
     setStatus("Ready. Generate a draft, then review and Apply.");
   } catch (err) {
@@ -355,6 +364,7 @@ async function open(node) {
   brief.addEventListener("input", clearDraft);
   modelSel.addEventListener("change", clearDraft);
   creativity.addEventListener("change", clearDraft);
+  shots.addEventListener("change", clearDraft);
   detail.addEventListener("input", clearDraft);
   refsBox.addEventListener("change", clearDraft);
   refsBox.addEventListener("input", clearDraft);
@@ -365,11 +375,11 @@ async function open(node) {
     if (openedKey !== hook.contextKey?.()) { setStatus("Director context changed. Close and reopen Forge.", true); return; }
     if (!text && !continuity) { setStatus("Write the idea first.", true); return; }
     if (!continuity) briefs.set(node.id, text);
-    remember({ model: modelSel.value, creativity: creativity.value, detail: Number(detail.value) });
+    remember({ model: modelSel.value, creativity: creativity.value, detail: Number(detail.value), shots: shots.value });
     result = null; output.hidden = true; output.textContent = ""; renderHistory();
     applyBtn.disabled = true;
     setControlsDisabled(true);
-    const draftOptions = { model: modelSel.value, detail: Number(detail.value), creativity: creativity.value };
+    const draftOptions = { model: modelSel.value, detail: Number(detail.value), creativity: creativity.value, shots: shots.value };
     const requestId = `forge-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
     running = requestId; renderHistory();
     genBtn.textContent = "Cancel";
@@ -381,7 +391,7 @@ async function open(node) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           request_id: requestId, brief: text, mode, duration: hook.duration(), model: modelSel.value,
-          detail: Number(detail.value), creativity: creativity.value,
+          detail: Number(detail.value), creativity: creativity.value, shots: shots.value,
           references: refs.map(({ item, ...r }) => r), settings: forgeSettings(), continuity, easy: labelled,
         }),
       });
