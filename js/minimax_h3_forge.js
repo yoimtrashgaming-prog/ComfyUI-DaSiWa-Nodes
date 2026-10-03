@@ -85,6 +85,7 @@ function installStyles() {
   .ds-forge h3{margin:0;font-size:15px;display:flex;justify-content:space-between;align-items:center}
   .ds-forge label{color:#9fb3c2;font-weight:600;font-size:12px}
   .ds-forge textarea,.ds-forge select,.ds-forge input[type=text]{width:100%;box-sizing:border-box;background:#0d1217;color:#e5eef4;border:1px solid #40515e;border-radius:4px;padding:7px;font:inherit}
+  .ds-forge option,.ds-forge optgroup{background:#0d1217;color:#e5eef4}
   .ds-forge textarea{min-height:90px;resize:vertical}
   .ds-forge .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   .ds-forge .field{display:flex;flex-direction:column;gap:4px}
