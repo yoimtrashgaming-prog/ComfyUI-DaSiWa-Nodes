@@ -99,7 +99,7 @@ test('replacing or disabling a reference cannot retain its textual appearance', 
   }
 });
 
-function directorHook({ items = [], continuing = false, useReferences = false, prompt = '' } = {}) {
+function directorHook({ items = [], continuing = false, useReferences = false, prompt = '', displayed = null } = {}) {
   const source = fs.readFileSync(path.join(__dirname, '..', 'js', 'minimax_h3_director.js'), 'utf8');
   const start = source.indexOf('  const forgeItems =');
   const end = source.indexOf('  if (modeWidget)', start);
@@ -112,6 +112,9 @@ function directorHook({ items = [], continuing = false, useReferences = false, p
   const contextKey = () => JSON.stringify([state, builderState, c]);
   const ctx = { ...helpers(), state, builderState, node,
     activeItems: () => state.items.filter(i => i.enabled !== false), isLockedSlot: () => false,
+    // REF2VA displays every enabled item; `displayed` stands in for a frame
+    // mode's slot filter.
+    displayedItems: () => (displayed ?? (all => all))(state.items.filter(i => i.enabled !== false)),
     laneForItem: i => i.type, mode: () => 'REF2VA', promptStyle: () => 'simple',
     setStatus: () => {}, continuityContext: () => continuing ? c : null,
     continuityState: () => c, isContinuing: () => continuing,
@@ -136,6 +139,18 @@ test('Director reference updates persist canonical state and portable packs', ()
   const portable = vm.runInNewContext(source.match(/  const PORTABLE_ITEM_KEYS = .*;\n  const toPortableItem = .*;/)[0] + '\ntoPortableItem(item)', { item: state.items[0] });
   assert.equal(portable.forge_instructions, 'Hands only');
   assert.equal(portable.forge_drop, 'clothes');
+});
+
+test('Forge receives only what the Director displays for the mode', () => {
+  // A frame mode's timeline shows its frame slots' pictures; a video and a
+  // picture left over from REF2VA stay on the timeline but hidden.
+  const items = [
+    { id: 'f', type: 'image', value: 'frame.png', slot: 0 },
+    { id: 'x', type: 'image', value: 'extra.png', slot: 3 },
+    { id: 'v', type: 'video', value: 'clip.mp4', slot: 0 },
+  ];
+  const { hook } = directorHook({ items, displayed: all => all.filter(i => i.type === 'image' && i.slot === 0) });
+  assert.deepEqual(hook.references().map(r => r.item.id), ['f']);
 });
 
 test('cleared picture extras stay absent through persistence and a legacy draft round trip', () => {

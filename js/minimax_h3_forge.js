@@ -87,6 +87,7 @@ const axisFrom = (stored, who) => stored === "none" ? "" : stored === "y" || sto
 const axisTo = (axis, who) => who.length < 2 || axis === "x" ? "" : axis || "none";
 const AXIS_BUTTONS = [["x", "left → right"], ["y", "top → bottom"], ["z", "front → back"]];
 const AXIS_TITLE = "Optional: where each one stands, in the order tapped. Tap the picked order again to turn it off.";
+const WHO_TITLE = "Who is in it. Pictures with the same Character number are one character. With two or more, the order below can say where each one stands.";
 const INSTRUCTIONS_HINT = {
   pose: "Pose only; identity, clothes and background stay unchanged. Add details if needed.",
   custom: "Describe what to use from this image (required).",
@@ -267,17 +268,20 @@ async function open(node) {
         // old single label still describes is saved as that label alone, so
         // drafts made before the buttons keep matching.
         let kinds = kindsOf(ref), who = whoOf(ref), axis = axisFrom(ref.who_axis, who);
-        const takesWho = () => kinds.some(k => k === "character" || k.endsWith("-frame"));
+        // On a Pose the numbers say who takes it, not who is in the picture.
+        const isPose = () => kinds[0] === "pose";
+        const takesWho = () => isPose() || kinds.some(k => k === "character" || k.endsWith("-frame"));
         const kindButtons = el("span", { className: "kinds", role: "group", title: "What this picture is. Character, Place, Style and the frames combine; Pose and Custom stand alone." });
         kindButtons.setAttribute("aria-label", `${name} is`);
-        const whoButtons = el("span", { className: "who", role: "group", title: "Who is in it. Pictures with the same Character number are one character. With two or more, the order below can say where each one stands." });
+        const whoButtons = el("span", { className: "who", role: "group", title: WHO_TITLE });
         whoButtons.setAttribute("aria-label", `${name} who is in it`);
         const axisButtons = el("span", { className: "who-axis", role: "group", title: AXIS_TITLE });
         axisButtons.setAttribute("aria-label", `${name} order`);
         const paint = () => {
           for (const b of kindButtons.querySelectorAll("button")) b.setAttribute("aria-pressed", String(kinds.includes(b.dataset.kind)));
           const most = Math.max(4, refs.filter(r => r.kind === "image").length, ...refs.flatMap(r => whoOf(r)), ...who);
-          whoButtons.replaceChildren(el("span", { className: "who-label", textContent: "Who" }), ...Array.from({ length: Math.min(most, 32) }, (_, i) => {
+          whoButtons.title = isPose() ? "Who takes this pose: the characters whose numbers you tap. Nobody in the pose picture becomes a character." : WHO_TITLE;
+          whoButtons.replaceChildren(el("span", { className: "who-label", textContent: isPose() ? "Who takes it" : "Who" }), ...Array.from({ length: Math.min(most, 32) }, (_, i) => {
             const n = i + 1, at = who.indexOf(n);
             const b = el("button", { type: "button", textContent: String(n), onclick: () => tapWho(n) });
             b.setAttribute("aria-pressed", String(at >= 0));
@@ -286,13 +290,15 @@ async function open(node) {
           }));
           whoButtons.hidden = !takesWho();
           for (const b of axisButtons.querySelectorAll("button")) b.setAttribute("aria-pressed", String(b.dataset.axis === axis));
-          axisButtons.hidden = !takesWho() || who.length < 2;
+          // Where takers stand comes from the shots, not from the pose picture.
+          axisButtons.hidden = !takesWho() || isPose() || who.length < 2;
         };
         const save = () => {
+          if (isPose()) axis = "";
           const label = primaryLabel(kinds, who, axis);
           const simple = describesAlone(label, kinds, who, axis);
           ref.easy_role = label;
-          const stored = axisTo(axis, who);
+          const stored = isPose() ? "" : axisTo(axis, who);
           if (simple) { delete ref.picture_kinds; delete ref.who; delete ref.who_axis; }
           else { ref.picture_kinds = [...kinds]; ref.who = [...who]; if (stored) ref.who_axis = stored; else delete ref.who_axis; }
           const role = labelRole(label);
@@ -309,9 +315,13 @@ async function open(node) {
           let n = 1; while (used.has(n) && n < 32) n += 1; return n;
         };
         const tapKind = k => {
+          const wasPose = isPose();
           if (ALONE_KINDS.has(k)) kinds = [k];
           else if (kinds.includes(k)) { if (kinds.length === 1) return; kinds = kinds.filter(x => x !== k); }
           else kinds = KIND_ORDER.filter(x => x === k || (kinds.includes(x) && !ALONE_KINDS.has(x)));
+          // In and out of Pose the numbers change meaning (who is in it /
+          // who takes it), so the old ones go rather than carry across.
+          if (wasPose !== isPose()) { who = []; axis = ""; }
           if (kinds.includes("character") && !who.length) who = [freeCharacter()];
           if (!takesWho()) { who = []; axis = ""; }
           save();
@@ -370,7 +380,10 @@ async function open(node) {
           axisButtons.append(b);
         }
         paint();
-        roleCell = el("span", { className: "pick" }, el("span", { className: "muted", textContent: BASE_ROLE[mode] }), whoButtons, axisButtons);
+        // FL2VA's ends are its slots: the first picture is the first frame and
+        // the second the last, as framed_brief reads them on the server.
+        const end = mode === "FL2VA" ? (refs.filter(r => r.kind === "image").indexOf(ref) === 1 ? "last frame" : "first frame") : BASE_ROLE[mode];
+        roleCell = el("span", { className: "pick" }, el("span", { className: "muted", textContent: end }), whoButtons, axisButtons);
       } else {
         roleCell = el("span", { className: "muted", textContent: ref.saved_reference ? "saved reference" : ref.kind === "image" ? BASE_ROLE[mode] || "frame" : ref.kind === "video" ? `motion · ${ref.stream}` : "voice" });
       }
@@ -394,7 +407,7 @@ async function open(node) {
     if (labelled) {
       box.append(el("span", { className: "muted", textContent: continuity
         ? "Pictures with the same Character number are one character."
-        : 'Pictures with the same Character number are one character. A picture with several people: tap each number in order, left to right (or pick top to bottom, front to back). A picture can be more than one thing: Character and Place for people with the background behind them, or a character who is also the first frame. In the idea, write "Character 1", "Character 2" and "the place". Image-only labelled drafts need no writer vision; mixed media and saved references use the full REF2VA path.' }));
+        : 'Pictures with the same Character number are one character. A picture with several people: tap each number in order, left to right (or pick top to bottom, front to back). A picture can be more than one thing: Character and Place for people with the background behind them, or a character who is also the first frame. On a Pose, the numbers say who takes the pose. In the idea, write "Character 1", "Character 2" and "the place". Image-only labelled drafts need no writer vision; mixed media and saved references use the full REF2VA path.' }));
     }
     box.append(visionChoice, visionHint, normalReferenceHint);
   } else if (mode !== "T2VA" && !continuity) {

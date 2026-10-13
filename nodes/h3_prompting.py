@@ -329,9 +329,17 @@ def parse_segments(text, expected):
     if not matches:
         raise ForgeError("no_segments", "The model returned no ===SEGMENT: markers — it did not follow the output format. Try a larger model.", raw)
     segments = {}
+    # A section headed with its official field name is that section: a small
+    # model can write `non_diegetic_music` for Music, and the draft then failed
+    # as "left out: Music" (PromptForge saw it from a 4B, 12 Oct 2026).
+    by_field = {field: label for label, field in _OFFICIAL.items()}
     for i, m in enumerate(matches):
         end = matches[i + 1].start() if i + 1 < len(matches) else len(raw)
-        segments[m.group(1).strip()] = raw[m.end():end].strip()
+        heading = m.group(1).strip()
+        label = by_field.get(heading, heading)
+        if label in segments:
+            label = heading
+        segments[label] = raw[m.end():end].strip()
     if "Refused" in segments:
         raise ForgeError("refused", f"The model refused: {segments['Refused']}", raw)
     missing = [label for label in expected if label not in segments]
@@ -687,7 +695,9 @@ def easy_cast(references):
             continue
         kinds, tapped = picture_kinds(ref), picture_who(ref)
         if kinds[0] in ("pose", "custom"):
-            uses.append({"picture": n, "which": kinds[0], "ref": ref})
+            # A pose's numbers say who takes it, not who is in the picture.
+            uses.append({"picture": n, "which": kinds[0], "ref": ref,
+                         "takers": tapped if kinds[0] == "pose" else []})
             continue
         plain = {**ref, "instructions": "", "keep": "", "drop": ""}
 
@@ -732,6 +742,15 @@ def easy_cast(references):
     for i, s in enumerate(subjects, 1):
         s["tag"] = f"<Subject {i}>"
     return {"subjects": subjects, "frames": frames, "uses": uses}
+
+
+def pose_takers(cast, use):
+    """" taken by <Subject 1> and <Subject 2>", for a pose with numbers tapped
+    on it, or "". Only characters in the cast are named: a number with no
+    Character picture has no subject to cite."""
+    tags = [s["tag"] for n in use.get("takers") or [] for s in cast["subjects"]
+            if s["kind"] == "character" and s.get("number") == n]
+    return f", taken by {' and '.join(tags)}" if tags else ""
 
 
 def _join_and(items):
@@ -812,7 +831,7 @@ def easy_lines(cast, sees_pictures=False):
         lines.append((f"- <Picture {f['picture']}> is the first frame: [Shot 1] opens on it exactly" if f["which"] == "first"
                       else f"- <Picture {f['picture']}> is the last frame: the final shot ends on it exactly") + _tail([f["ref"]]))
     for u in cast["uses"]:
-        lines.append((f"- <Picture {u['picture']}> gives a pose only: stance, limb position and gesture; not who anyone is, "
+        lines.append((f"- <Picture {u['picture']}> gives a pose only{pose_takers(cast, u)}: stance, limb position and gesture; not who anyone is, "
                       "their clothes or the background" if u["which"] == "pose"
                       else f"- <Picture {u['picture']}> is used only as its instructions say") + _tail([u["ref"]]))
     return lines
@@ -1040,7 +1059,7 @@ def easy_segments(cast, segments, description_targets=None):
             notes, f"the {'opening' if f['which'] == 'first' else 'closing'} composition, lighting and subject positions are retained."))
     for u in cast["uses"]:
         said = _cap(_sentence(str(u["ref"].get("instructions") or "").strip()))
-        definitions.append((f"<Picture {u['picture']}> gives the pose only: stance, limb position and gesture, "
+        definitions.append((f"<Picture {u['picture']}> gives the pose only{pose_takers(cast, u)}: stance, limb position and gesture, "
                             "not identity, clothing or background." + (f" {said}" if said else "")
                             + described(f"<Picture {u['picture']}>"))
                            if u["which"] == "pose" else f"<Picture {u['picture']}>: {said}")

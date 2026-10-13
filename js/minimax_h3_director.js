@@ -2027,7 +2027,11 @@ function install(node) {
   // H3 Forge (js/minimax_h3_forge.js) reads the timeline from here and writes
   // its result back through apply(), so the builder fields, the Simple box and
   // the hidden widgets all update the same way a typed edit does.
-  const forgeItems = () => activeItems().filter(item => !item._audioEcho && !isLockedSlot(item)).map(item => ({ ...item, lane: laneForItem(item) }));
+  // What this mode uses, as the timeline shows it: every enabled item in
+  // REF2VA, only the frame slots' pictures in I2VA / FL2VA / L2VA, nothing in
+  // T2VA. Media left on the timeline from another mode stays hidden, and so
+  // stays out of Forge's request.
+  const forgeItems = () => displayedItems().filter(item => !item._audioEcho && !isLockedSlot(item)).map(item => ({ ...item, lane: laneForItem(item) }));
   const forgeRefs = () => {
     const c = continuityContext();
     if (c && (mode() !== "REF2VA" || !c.use_references)) return [];
