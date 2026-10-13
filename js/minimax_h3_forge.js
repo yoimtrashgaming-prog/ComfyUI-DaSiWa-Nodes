@@ -88,6 +88,11 @@ const axisTo = (axis, who) => who.length < 2 || axis === "x" ? "" : axis || "non
 const AXIS_BUTTONS = [["x", "left → right"], ["y", "top → bottom"], ["z", "front → back"]];
 const AXIS_TITLE = "Optional: where each one stands, in the order tapped. Tap the picked order again to turn it off.";
 const WHO_TITLE = "Who is in it. Pictures with the same Character number are one character. With two or more, the order below can say where each one stands.";
+// Who buttons: six to start, one more each time the highest is in use, up to
+// ten characters - about as many as one clip can keep apart, and the cap
+// PromptForge used. A number already saved above ten still shows.
+const WHO_SHOWN = 6, WHO_MAX = 10;
+const whoShown = (pictures, used) => Math.max(Math.min(WHO_MAX, Math.max(WHO_SHOWN, pictures, Math.max(0, ...used) + 1)), ...used);
 const INSTRUCTIONS_HINT = {
   pose: "Pose only; identity, clothes and background stay unchanged. Add details if needed.",
   custom: "Describe what to use from this image (required).",
@@ -279,7 +284,7 @@ async function open(node) {
         axisButtons.setAttribute("aria-label", `${name} order`);
         const paint = () => {
           for (const b of kindButtons.querySelectorAll("button")) b.setAttribute("aria-pressed", String(kinds.includes(b.dataset.kind)));
-          const most = Math.max(4, refs.filter(r => r.kind === "image").length, ...refs.flatMap(r => whoOf(r)), ...who);
+          const most = whoShown(refs.filter(r => r.kind === "image").length, [...refs.flatMap(r => whoOf(r)), ...who]);
           whoButtons.title = isPose() ? "Who takes this pose: the characters whose numbers you tap. Nobody in the pose picture becomes a character." : WHO_TITLE;
           whoButtons.replaceChildren(el("span", { className: "who-label", textContent: isPose() ? "Who takes it" : "Who" }), ...Array.from({ length: Math.min(most, 32) }, (_, i) => {
             const n = i + 1, at = who.indexOf(n);
@@ -312,7 +317,7 @@ async function open(node) {
         // Character picks a number no other picture uses.
         const freeCharacter = () => {
           const used = new Set(refs.filter(r => r !== ref && kindsOf(r).includes("character")).flatMap(r => whoOf(r)));
-          let n = 1; while (used.has(n) && n < 32) n += 1; return n;
+          let n = 1; while (used.has(n) && n < WHO_MAX) n += 1; return n;
         };
         const tapKind = k => {
           const wasPose = isPose();
@@ -363,7 +368,7 @@ async function open(node) {
           node.graph?.setDirtyCanvas(true, true);
         };
         const paint = () => {
-          const most = Math.max(4, refs.filter(r => r.kind === "image").length, ...who);
+          const most = whoShown(refs.filter(r => r.kind === "image").length, who);
           whoButtons.replaceChildren(el("span", { className: "who-label", textContent: "Who" }), ...Array.from({ length: Math.min(most, 32) }, (_, i) => {
             const n = i + 1, at = who.indexOf(n);
             const b = el("button", { type: "button", textContent: String(n), onclick: () => { who = at >= 0 ? who.filter(x => x !== n) : [...who, n]; save(); } });
