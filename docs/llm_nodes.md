@@ -76,11 +76,11 @@ Sits between the Prompt Writer and the sampler: a preview box and a CLIP Text En
 - `llm_prompt` (optional): the Prompt Writer's `prompt` output.
 - `clip`: the text encoder, as on CLIP Text Encode.
 - `prompt`: the box. Each new prompt from the writer replaces it; edit it freely and queue again. Only the encode runs again for an edit, not the writer.
-- `run_writer`: on (the default), the writer runs and a new prompt from it replaces the box. Off, the writer does not run at all and the box is encoded as it is. An empty box always asks the writer.
+- `prompt_edit`: off (the default), Run asks the writer and a new prompt from it replaces the box. On, the writer does not run at all and the box is encoded as you left it. An empty box always asks the writer.
 
-The writer seed randomizes after each run by default, so with `run_writer` on every queue writes a new prompt. Turn `run_writer` off, set the writer seed to fixed, or bypass the writer (Ctrl+B) to keep your edits. Without a writer connected, or with it bypassed, the node is a plain text encode of the box.
+The writer seed randomizes after each run by default, so with `prompt_edit` off every queue writes a new prompt. Turn `prompt_edit` on, set the writer seed to fixed, or bypass the writer (Ctrl+B) to keep your edits. Without a writer connected, or with it bypassed, the node is a plain text encode of the box.
 
-Outputs `conditioning` and the encoded text as `prompt`. The last writer prompt seen is stored in the node's properties, so this works the same after reloading the workflow.
+Outputs `conditioning`. The last writer prompt seen is stored in the node's properties, so this works the same after reloading the workflow.
 
 ### DaSiWa LLM Model Selector (Advanced)
 
