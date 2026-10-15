@@ -354,7 +354,11 @@ def parse_segments(text, expected):
         label = by_field.get(heading, heading)
         if label in segments:
             label = heading
-        segments[label] = raw[m.end():end].strip()
+        body = raw[m.end():end].strip()
+        # Small models sometimes echo the guide's marker line after the answer;
+        # an empty repeat must not erase the segment already written.
+        if body.strip("`").strip() or label not in segments:
+            segments[label] = body
     if "Refused" in segments:
         raise ForgeError("refused", f"The model refused: {segments['Refused']}", raw)
     missing = [label for label in expected if label not in segments]

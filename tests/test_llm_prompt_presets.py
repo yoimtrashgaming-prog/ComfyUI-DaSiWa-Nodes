@@ -124,6 +124,13 @@ def test_prompt_projection_rejects_empty_primary_segment():
         prompts.prompt_response("promptforge_krea2", "===SEGMENT: Enhanced prompt===\n \n")
 
 
+def test_prompt_projection_ignores_an_echoed_empty_marker():
+    # Seen from the r4 4B on Krea2: the answer, then the guide's fenced marker again.
+    raw = ("===SEGMENT: Enhanced prompt===\nA woman waits at a bus stop at night.\n\n"
+           "```\n===SEGMENT: Enhanced prompt===\n```")
+    assert prompts.prompt_response("promptforge_krea2", raw) == "A woman waits at a bus stop at night."
+
+
 def test_preset_labels_append_new_ids_after_exact_legacy_contract():
     baseline = json.loads((Path(__file__).parent / "fixtures" / "llm_legacy_contract.json").read_text())
     legacy = baseline["presets"]
