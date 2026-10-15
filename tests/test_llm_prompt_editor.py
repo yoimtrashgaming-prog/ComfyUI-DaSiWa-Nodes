@@ -35,16 +35,16 @@ def pnginfo(seen, node_id=7):
     return {"workflow": {"nodes": [{"id": node_id, "properties": props}]}}
 
 
-def run(prompt, llm_prompt=None, seen=None, keep_edits=False):
+def run(prompt, llm_prompt=None, seen=None, run_writer=True):
     clip = FakeClip()
-    out = Node().encode(clip, prompt, keep_edits, llm_prompt=llm_prompt, unique_id="7", extra_pnginfo=pnginfo(seen))
+    out = Node().encode(clip, prompt, run_writer, llm_prompt=llm_prompt, unique_id="7", extra_pnginfo=pnginfo(seen))
     return out, clip
 
 
 def test_schema():
     schema = Node.INPUT_TYPES()
-    assert list(schema["required"]) == ["clip", "prompt", "keep_edits"]
-    assert schema["required"]["keep_edits"][1]["default"] is False
+    assert list(schema["required"]) == ["clip", "prompt", "run_writer"]
+    assert schema["required"]["run_writer"][1]["default"] is True
     assert schema["optional"]["llm_prompt"][1]["lazy"] is True
     assert schema["optional"]["llm_prompt"][1]["forceInput"] is True
     assert schema["required"]["prompt"][1]["dynamicPrompts"] is False
@@ -73,7 +73,7 @@ def test_cached_writer_prompt_keeps_the_edit():
 
 
 def test_no_writer_text_encodes_the_box_and_keeps_last_seen():
-    out, clip = run("typed by hand", llm_prompt=None, seen="first prompt", keep_edits=True)
+    out, clip = run("typed by hand", llm_prompt=None, seen="first prompt", run_writer=False)
     assert clip.encoded == ["typed by hand"]
     assert out["ui"] == {"prompt": [], "llm_prompt": ["first prompt"]}
 
@@ -86,29 +86,29 @@ def test_box_is_encoded_exactly_as_typed():
 
 def test_missing_clip_is_a_clear_error():
     with pytest.raises(RuntimeError, match="clip input is invalid"):
-        Node().encode(None, "x", False)
+        Node().encode(None, "x", True)
 
 
-@pytest.mark.parametrize("keep_edits,box,linked,wanted", [
-    (False, "", True, ["llm_prompt"]),
-    (False, "edited", True, ["llm_prompt"]),
-    (True, "edited", True, []),
-    (True, "   ", True, ["llm_prompt"]),
-    (False, "", False, []),
+@pytest.mark.parametrize("run_writer,box,linked,wanted", [
+    (True, "", True, ["llm_prompt"]),
+    (True, "edited", True, ["llm_prompt"]),
+    (False, "edited", True, []),
+    (False, "   ", True, ["llm_prompt"]),
     (True, "", False, []),
+    (False, "", False, []),
 ])
-def test_lazy_status(keep_edits, box, linked, wanted):
-    inputs = {"prompt": box, "keep_edits": keep_edits}
+def test_lazy_status(run_writer, box, linked, wanted):
+    inputs = {"prompt": box, "run_writer": run_writer}
     if linked:
         inputs["llm_prompt"] = ["3", 0]
-    got = Node().check_lazy_status(box, keep_edits, dynprompt=FakeDynPrompt(inputs), unique_id="7")
+    got = Node().check_lazy_status(box, run_writer, dynprompt=FakeDynPrompt(inputs), unique_id="7")
     assert got == wanted
 
 
 def test_constant_llm_prompt_is_not_requested():
     # Only a link can be requested; ComfyUI raises on a constant.
     dyn = FakeDynPrompt({"llm_prompt": "typed"})
-    assert Node().check_lazy_status("", False, dynprompt=dyn, unique_id="7") == []
+    assert Node().check_lazy_status("", True, dynprompt=dyn, unique_id="7") == []
 
 
 def test_last_seen_inside_a_subgraph():
