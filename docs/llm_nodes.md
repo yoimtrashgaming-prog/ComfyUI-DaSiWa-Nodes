@@ -69,6 +69,19 @@ live in `data/llm_skills/yue2_*.md`. Based on the official
 [YuE2 music guide](https://github.com/multimodal-art-projection/YuE/blob/main/skills/yue2-music/SKILL.md)
 and [instrumental guide](https://github.com/multimodal-art-projection/YuE/blob/main/skills/yue2-music/instrumental/SKILL.md).
 
+### LLM Prompt Editor
+
+Sits between the Prompt Writer and the sampler: a preview box and a CLIP Text Encode in one node.
+
+- `llm_prompt` (optional): the Prompt Writer's `prompt` output.
+- `clip`: the text encoder, as on CLIP Text Encode.
+- `prompt`: the box. Each new prompt from the writer replaces it; edit it freely and queue again. Only the encode runs again for an edit, not the writer.
+- `keep_edits`: on, the writer does not run at all and the box is encoded as it is. Off, a new prompt from the writer replaces the box. An empty box always asks the writer.
+
+The writer seed randomizes after each run by default, so with `keep_edits` off every queue writes a new prompt. Turn `keep_edits` on, set the writer seed to fixed, or bypass the writer (Ctrl+B) to keep your edits. Without a writer connected, or with it bypassed, the node is a plain text encode of the box.
+
+Outputs `conditioning` and the encoded text as `prompt`. The last writer prompt seen is stored in the node's properties, so this works the same after reloading the workflow.
+
 ### DaSiWa LLM Model Selector (Advanced)
 
 Creates a lightweight `DASIWA_LLM_CONFIG` bundle. It does not output a live model object, which helps the analyze node unload memory reliably after generation.

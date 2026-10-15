@@ -12,6 +12,7 @@ if __package__:
     from .nodes.nodes_wildcard_preset_prompt_builder import DaSiWa_WildcardPresetPromptBuilder
     from .nodes.nodes_llm import DaSiWa_LLMModelSelector, DaSiWa_LLMAnalyze
     from .nodes.nodes_llm_simple import DaSiWa_LLMPromptWriter
+    from .nodes.nodes_llm_prompt_editor import DaSiWa_LLMPromptEditor
     from .nodes.nodes_inpaint import DaSiWa_InpaintCropPrep, DaSiWa_InpaintComposite
     from .nodes.nodes_enhanced_video_combine import DaSiWa_EnhancedVideoCombine
     from .nodes.nodes_seamless_loop import DaSiWa_SeamlessLoop
@@ -51,6 +52,7 @@ if __package__:
         "DaSiWa_LLMModelSelector": DaSiWa_LLMModelSelector,
         "DaSiWa_LLMAnalyze": DaSiWa_LLMAnalyze,
         "DaSiWa_LLMPromptWriter": DaSiWa_LLMPromptWriter,
+        "DaSiWa_LLMPromptEditor": DaSiWa_LLMPromptEditor,
         "DaSiWa_EnhancedVideoCombine": DaSiWa_EnhancedVideoCombine,
         "DaSiWa_SeamlessLoop": DaSiWa_SeamlessLoop,
         "DaSiWa_InpaintCropPrep": DaSiWa_InpaintCropPrep,
@@ -83,6 +85,7 @@ if __package__:
         "DaSiWa_LLMModelSelector": "DaSiWa LLM Model Selector (Advanced)",
         "DaSiWa_LLMAnalyze": "DaSiWa LLM Analyze (Advanced)",
         "DaSiWa_LLMPromptWriter": "LLM Prompt Writer",
+        "DaSiWa_LLMPromptEditor": "LLM Prompt Editor",
         "DaSiWa_EnhancedVideoCombine": "DaSiWa Enhanced Video Combine",
         "DaSiWa_SeamlessLoop": "Seamless Loop",
         "DaSiWa_InpaintCropPrep": "DaSiWa Inpaint Crop Prep",
